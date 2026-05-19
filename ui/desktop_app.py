@@ -1,0 +1,551 @@
+from __future__ import annotations
+
+import os
+import sys
+from typing import List, Tuple
+
+from PySide6.QtCore import QPointF, QRectF, Qt, QTimer
+from PySide6.QtGui import QAction, QColor, QPainter, QPen, QPolygonF
+from PySide6.QtWidgets import (
+    QApplication,
+    QComboBox,
+    QFileDialog,
+    QFormLayout,
+    QGraphicsPolygonItem,
+    QGraphicsScene,
+    QGraphicsView,
+    QHeaderView,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMainWindow,
+    QMessageBox,
+    QPushButton,
+    QPlainTextEdit,
+    QSplitter,
+    QTableWidget,
+    QTableWidgetItem,
+    QToolBar,
+    QVBoxLayout,
+    QWidget,
+)
+
+try:
+    import pytesseract
+    from PIL import Image
+
+    pytesseract.pytesseract.tesseract_cmd = (
+        r"C:\Users\crivero\AppData\Local\Programs\Tesseract-OCR\tesseract.exe"
+    )
+except Exception:
+    pytesseract = None
+    Image = None
+
+from exporters.dxf import export_dxf
+from geometry.builder import build_geometry
+from transcription.parser import parse_legal_description
+
+Point = Tuple[float, float]
+
+
+class ParcelCanvas(QGraphicsView):
+    def __init__(self) -> None:
+        super().__init__()
+        self._scene = QGraphicsScene(self)
+        self.setScene(self._scene)
+        self.setRenderHint(QPainter.Antialiasing)
+        self.setBackgroundBrush(QColor("#f7f9fc"))
+        self.setSceneRect(QRectF(0, 0, 1000, 700))
+
+        self._transformed_points: List[QPointF] = []
+        self._segments: List[Tuple[Point, Point, str]] = []
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._draw_next_segment)
+        self._draw_index = 0
+
+    def clear_canvas(self) -> None:
+        self._timer.stop()
+        self._scene.clear()
+        self._transformed_points = []
+        self._segments = []
+        self._draw_index = 0
+
+    def _transform_points(self, points: List[Point]) -> List[QPointF]:
+        xs = [p[0] for p in points]
+        ys = [p[1] for p in points]
+
+        min_x, max_x = min(xs), max(xs)
+        min_y, max_y = min(ys), max(ys)
+
+        width = max(max_x - min_x, 1.0)
+        height = max(max_y - min_y, 1.0)
+
+        pad = 60.0
+        view_w = 1000.0
+        view_h = 700.0
+
+        scale_x = (view_w - 2 * pad) / width
+        scale_y = (view_h - 2 * pad) / height
+        scale = min(scale_x, scale_y)
+
+        transformed: List[QPointF] = []
+        for pt in points:
+            x = pad + (pt[0] - min_x) * scale
+            y = view_h - pad - (pt[1] - min_y) * scale
+            transformed.append(QPointF(x, y))
+
+        return transformed
+
+    def _add_north_arrow(self) -> None:
+        arrow_pen = QPen(QColor("#0f172a"))
+        arrow_pen.setWidth(2)
+
+        base_x = 60
+        base_y = 80
+        top_y = 30
+
+        self._scene.addLine(base_x, base_y, base_x, top_y, arrow_pen)
+
+        triangle = QPolygonF(
+            [
+                QPointF(base_x, top_y - 8),
+                QPointF(base_x - 8, top_y + 8),
+                QPointF(base_x + 8, top_y + 8),
+            ]
+        )
+        arrow_head = QGraphicsPolygonItem(triangle)
+        arrow_head.setBrush(QColor("#0f172a"))
+        arrow_head.setPen(arrow_pen)
+        self._scene.addItem(arrow_head)
+
+        label = self._scene.addSimpleText("N")
+        label.setBrush(QColor("#0f172a"))
+        label.setPos(base_x - 6, top_y - 28)
+
+    def prepare_drawing(self, points: List[Point], labels: List[str]) -> None:
+        self.clear_canvas()
+
+        if len(points) < 2:
+            return
+
+        self._transformed_points = self._transform_points(points)
+        self._segments = []
+
+        for i in range(len(points) - 1):
+            label = labels[i] if i < len(labels) else str(i + 1)
+            self._segments.append((points[i], points[i + 1], label))
+
+        self._add_north_arrow()
+
+    def animate(self, points: List[Point], labels: List[str]) -> None:
+        self.prepare_drawing(points, labels)
+        if not self._segments:
+            return
+        self._draw_index = 0
+        self._timer.start(220)
+
+    def draw_static(self, points: List[Point], labels: List[str]) -> None:
+        self.prepare_drawing(points, labels)
+        while self._draw_index < len(self._segments):
+            self._draw_next_segment()
+        self.zoom_to_fit()
+
+    def _draw_next_segment(self) -> None:
+        if self._draw_index >= len(self._segments):
+            self._timer.stop()
+            self.zoom_to_fit()
+            return
+
+        i = self._draw_index
+        p1 = self._transformed_points[i]
+        p2 = self._transformed_points[i + 1]
+        _, _, label_text = self._segments[i]
+
+        line_pen = QPen(QColor("#1f2937"))
+        line_pen.setWidth(2)
+        self._scene.addLine(p1.x(), p1.y(), p2.x(), p2.y(), line_pen)
+
+        vertex_pen = QPen(QColor("#2563eb"))
+        vertex_pen.setWidth(1)
+        self._scene.addEllipse(p1.x() - 3, p1.y() - 3, 6, 6, vertex_pen)
+        if i == len(self._segments) - 1:
+            self._scene.addEllipse(p2.x() - 3, p2.y() - 3, 6, 6, vertex_pen)
+
+        mid_x = (p1.x() + p2.x()) / 2
+        mid_y = (p1.y() + p2.y()) / 2
+        label = self._scene.addSimpleText(label_text)
+        label.setBrush(QColor("#b91c1c"))
+        label.setPos(mid_x + 6, mid_y + 6)
+
+        self._draw_index += 1
+
+    def zoom_to_fit(self) -> None:
+        rect = self._scene.itemsBoundingRect()
+        if rect.isValid():
+            rect = rect.adjusted(-30, -30, 30, 30)
+            self.fitInView(rect, Qt.KeepAspectRatio)
+
+
+class ParcelDesktopApp(QMainWindow):
+    def __init__(self) -> None:
+        super().__init__()
+
+        self.setWindowTitle("COGO Validator + DXF Export")
+        self.resize(1500, 900)
+
+        self.calls = []
+        self.result = None
+
+        self._build_toolbar()
+        self._build_ui()
+
+    def _build_toolbar(self) -> None:
+        toolbar = QToolBar("Main Toolbar")
+        self.addToolBar(toolbar)
+
+        parse_action = QAction("Parse", self)
+        parse_action.triggered.connect(self.parse_legal_text)
+        toolbar.addAction(parse_action)
+
+        build_action = QAction("Build", self)
+        build_action.triggered.connect(self.build_parcel)
+        toolbar.addAction(build_action)
+
+        animate_action = QAction("Animate", self)
+        animate_action.triggered.connect(self.animate_parcel)
+        toolbar.addAction(animate_action)
+
+        export_action = QAction("Export DXF", self)
+        export_action.triggered.connect(self.export_dxf_file)
+        toolbar.addAction(export_action)
+
+        zoom_action = QAction("Zoom To Fit", self)
+        zoom_action.triggered.connect(self.zoom_to_fit)
+        toolbar.addAction(zoom_action)
+
+        ocr_action = QAction("Load Image OCR", self)
+        ocr_action.triggered.connect(self.load_image_ocr)
+        toolbar.addAction(ocr_action)
+
+    def _build_ui(self) -> None:
+        main = QWidget()
+        self.setCentralWidget(main)
+
+        splitter = QSplitter(Qt.Horizontal)
+
+        left = QWidget()
+        left_layout = QVBoxLayout(left)
+
+        title = QLabel("Paste Legal Description")
+        title.setStyleSheet("font-size: 18px; font-weight: 600;")
+        left_layout.addWidget(title)
+
+        coords_form = QFormLayout()
+        self.start_x_input = QLineEdit("0.0")
+        self.start_y_input = QLineEdit("0.0")
+        self.basis_combo = QComboBox()
+        self.basis_combo.addItems(["True North"])
+
+        coords_form.addRow("Start X:", self.start_x_input)
+        coords_form.addRow("Start Y:", self.start_y_input)
+        coords_form.addRow("Basis:", self.basis_combo)
+        left_layout.addLayout(coords_form)
+
+        self.legal_input = QPlainTextEdit()
+        self.legal_input.setPlaceholderText(
+            'Example:\n'
+            'N 90°00\'00" E 100\n'
+            'N 00°00\'00" E 100\n'
+            'N 90°00\'00" W 100\n'
+            'S 00°00\'00" W 100'
+        )
+        left_layout.addWidget(self.legal_input, stretch=3)
+
+        button_row = QHBoxLayout()
+
+        parse_btn = QPushButton("Parse Courses")
+        parse_btn.clicked.connect(self.parse_legal_text)
+        button_row.addWidget(parse_btn)
+
+        build_btn = QPushButton("Build Parcel")
+        build_btn.clicked.connect(self.build_parcel)
+        button_row.addWidget(build_btn)
+
+        animate_btn = QPushButton("Animate")
+        animate_btn.clicked.connect(self.animate_parcel)
+        button_row.addWidget(animate_btn)
+
+        ocr_btn = QPushButton("Load Image OCR")
+        ocr_btn.clicked.connect(self.load_image_ocr)
+        button_row.addWidget(ocr_btn)
+
+        export_btn = QPushButton("Export DXF")
+        export_btn.clicked.connect(self.export_dxf_file)
+        button_row.addWidget(export_btn)
+
+        left_layout.addLayout(button_row)
+
+        table_label = QLabel("Extracted COGO Courses")
+        table_label.setStyleSheet("font-size: 16px; font-weight: 600;")
+        left_layout.addWidget(table_label)
+
+        self.course_table = QTableWidget(0, 6)
+        self.course_table.setHorizontalHeaderLabels(
+            ["ID", "Type", "Direction", "Distance", "Radius", "Delta"]
+        )
+        self.course_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        left_layout.addWidget(self.course_table, stretch=3)
+
+        right = QWidget()
+        right_layout = QVBoxLayout(right)
+
+        canvas_label = QLabel("Parcel Preview")
+        canvas_label.setStyleSheet("font-size: 16px; font-weight: 600;")
+        right_layout.addWidget(canvas_label)
+
+        self.canvas = ParcelCanvas()
+        right_layout.addWidget(self.canvas, stretch=4)
+
+        validation_label = QLabel("Validation")
+        validation_label.setStyleSheet("font-size: 16px; font-weight: 600;")
+        right_layout.addWidget(validation_label)
+
+        self.validation_panel = QWidget()
+        validation_layout = QFormLayout(self.validation_panel)
+
+        self.closure_value = QLabel("-")
+        self.intersections_value = QLabel("-")
+        self.curve_errors_value = QLabel("-")
+
+        validation_layout.addRow("Closure Misclose:", self.closure_value)
+        validation_layout.addRow("Intersections:", self.intersections_value)
+        validation_layout.addRow("Curve Error Groups:", self.curve_errors_value)
+
+        right_layout.addWidget(self.validation_panel)
+
+        splitter.addWidget(left)
+        splitter.addWidget(right)
+        splitter.setSizes([760, 740])
+
+        layout = QHBoxLayout(main)
+        layout.addWidget(splitter)
+
+    def _get_start_point(self) -> Point:
+        try:
+            x = float(self.start_x_input.text().strip())
+            y = float(self.start_y_input.text().strip())
+        except ValueError as exc:
+            raise ValueError("Start X and Start Y must be numeric.") from exc
+        return (x, y)
+
+    def _call_label_for_row(self, call) -> str:
+        if hasattr(call, "bearing") and call.bearing is not None and hasattr(call, "distance"):
+            direction = call.bearing.raw_text
+            distance = call.distance.value if call.distance else ""
+            return f"{direction} / {distance}"
+
+        if hasattr(call, "params") and call.params is not None:
+            radius = call.params.radius if call.params.radius is not None else ""
+            delta = ""
+            if call.params.delta is not None:
+                d = call.params.delta
+                delta = f'{d.deg}°{d.minutes:02d}\'{int(d.seconds):02d}"'
+            hand = call.params.handedness.value.upper() if call.params.handedness else ""
+            return f"{hand} R={radius} Δ={delta}"
+
+        return getattr(call, "id", "?")
+
+    def show_error(self, message: str) -> None:
+        QMessageBox.warning(self, "Build Failed", message)
+
+    def parse_legal_text(self) -> None:
+        text = self.legal_input.toPlainText().strip()
+
+        if not text:
+            QMessageBox.warning(self, "No Text", "Paste a legal description first.")
+            return
+
+        calls, errors, reference_ties = parse_legal_description(text)
+        self.calls = calls
+
+        self.course_table.setRowCount(len(calls))
+
+        for row, call in enumerate(calls):
+            call_type = type(call).__name__.replace("Call", "")
+            direction = ""
+            distance = ""
+            radius = ""
+            delta = ""
+
+            if hasattr(call, "bearing") and call.bearing is not None:
+                direction = call.bearing.raw_text
+
+            if hasattr(call, "distance") and call.distance is not None:
+                distance = str(call.distance.value)
+
+            if hasattr(call, "params") and call.params is not None:
+                if call.params.radius is not None:
+                    radius = str(call.params.radius)
+                if call.params.delta is not None:
+                    d = call.params.delta
+                    delta = f'{d.deg}°{d.minutes:02d}\'{int(d.seconds):02d}"'
+                if call.params.handedness is not None:
+                    direction = call.params.handedness.value.upper()
+
+            values = [
+                getattr(call, "id", ""),
+                call_type,
+                direction,
+                distance,
+                radius,
+                delta,
+            ]
+
+            for col, value in enumerate(values):
+                self.course_table.setItem(row, col, QTableWidgetItem(str(value)))
+
+        if errors:
+            QMessageBox.warning(self, "Parse Issues", "\n".join(errors))
+
+    def _build_result(self) -> None:
+        if not self.calls:
+            self.parse_legal_text()
+            if not self.calls:
+                self.result = None
+                return
+
+        start_point = self._get_start_point()
+        result = build_geometry(start_point=start_point, calls=self.calls)
+
+        if not result or "points" not in result or not result["points"]:
+            self.result = None
+            return
+
+        self.result = result
+
+        validation = self.result.get("validation", {})
+        closure = validation.get("closure", {})
+        intersections = validation.get("intersections", [])
+        curve_errors = validation.get("curve_errors", [])
+
+        self.closure_value.setText(str(closure.get("misclosure", "-")))
+        self.intersections_value.setText(str(len(intersections)))
+        self.curve_errors_value.setText(str(len(curve_errors)))
+
+    def build_parcel(self) -> None:
+        try:
+            self._build_result()
+        except Exception as exc:
+            QMessageBox.critical(self, "Build Failed", str(exc))
+            return
+
+        if not self.result or "points" not in self.result:
+            self.show_error(
+                "No valid courses parsed.\n\n"
+                "This description may contain narrative text.\n"
+                "Try simplifying or check parser support."
+            )
+            return
+
+        points = self.result["points"]
+        labels = [self._call_label_for_row(call) for call in self.calls]
+        self.canvas.draw_static(points, labels)
+
+    def animate_parcel(self) -> None:
+        try:
+            self._build_result()
+        except Exception as exc:
+            QMessageBox.critical(self, "Build Failed", str(exc))
+            return
+
+        if not self.result or "points" not in self.result:
+            self.show_error(
+                "No valid COGO courses parsed.\n\n"
+                "This description may contain narrative text not yet supported."
+            )
+            return
+
+        points = self.result["points"]
+        labels = [self._call_label_for_row(call) for call in self.calls]
+        self.canvas.animate(points, labels)
+
+    def export_dxf_file(self) -> None:
+        if not self.result:
+            try:
+                self._build_result()
+            except Exception as exc:
+                QMessageBox.critical(self, "Build Failed", str(exc))
+                return
+
+        if not self.result or "points" not in self.result:
+            self.show_error(
+                "No valid courses parsed.\n\n"
+                "Build a parcel before exporting."
+            )
+            return
+
+        output_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save DXF",
+            os.path.join(os.getcwd(), "parcel.dxf"),
+            "DXF Files (*.dxf)",
+        )
+
+        if not output_path:
+            return
+
+        try:
+            export_dxf(self.result["points"], output_path)
+        except Exception as exc:
+            QMessageBox.critical(self, "Export Failed", str(exc))
+            return
+
+        QMessageBox.information(self, "Export Complete", f"DXF written:\n{output_path}")
+
+    def zoom_to_fit(self) -> None:
+        self.canvas.zoom_to_fit()
+
+    def load_image_ocr(self) -> None:
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Open Legal Description Image",
+            "",
+            "Images (*.png *.jpg *.jpeg *.tif *.tiff *.bmp)",
+        )
+
+        if not file_path:
+            return
+
+        if pytesseract is None or Image is None:
+            QMessageBox.critical(
+                self,
+                "OCR Missing",
+                "Install OCR first:\n\npip install pytesseract Pillow",
+            )
+            return
+
+        try:
+            img = Image.open(file_path)
+            text = pytesseract.image_to_string(img)
+        except Exception as exc:
+            QMessageBox.critical(self, "OCR Failed", str(exc))
+            return
+
+        self.legal_input.setPlainText(text)
+
+        QMessageBox.information(
+            self,
+            "OCR Complete",
+            "Image text loaded into legal description box.",
+        )
+
+
+def main() -> None:
+    app = QApplication(sys.argv)
+    window = ParcelDesktopApp()
+    window.show()
+    sys.exit(app.exec())
+
+
+if __name__ == "__main__":
+    main()

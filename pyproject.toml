@@ -1,0 +1,8 @@
+[project]
+name = "parcel_engine"
+version = "0.1.0"
+description = "Deterministic parcel geometry engine"
+requires-python = ">=3.10"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
