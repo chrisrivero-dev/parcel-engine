@@ -1,142 +1,75 @@
-# Forge --- Local Code Assistant
+# Parcel Engine
 
-### (Evolving into Overseer --- Deterministic Engineering Supervisor)
+Parcel Engine is a local Python tool for parsing metes-and-bounds legal descriptions, converting calls into geometry, validating closure, and previewing parcel shapes.
 
-Forge is a production-grade local coding assistant that connects to any
-OpenAI-compatible LLM endpoint (LM Studio, Ollama, vLLM, etc.),
-generates validated unified diffs, and allows preview, application, or
-rejection of changes through a two-panel interface.
+The goal is to support Mapping workflow research and testing by turning legal-description text into structured COGO calls and drawable parcel geometry.
 
-Forge provides the **interactive execution surface**.
+> This repository does not contain official County data, real APNs, private legal descriptions, Q-drive files, or internal production records.
 
-Overseer is the next layer: a **deterministic supervisory backbone**
-that adds persistence, telemetry, and orchestration.
+---
 
-------------------------------------------------------------------------
+## Purpose
 
-# 🚧 Overseer Roadmap (Active Development)
+Parcel Engine is designed to help test whether legal descriptions can be converted into:
 
-Forge currently handles:
+- Parsed line calls
+- Parsed curve calls
+- Coordinate paths
+- Parcel preview geometry
+- Closure validation
+- DXF / GeoJSON exports
 
--   Diff generation
--   Validation
--   Git safety enforcement
--   Human-in-the-loop approval
+This project is experimental and should be treated as a local mapping support tool, not an authoritative legal or surveying system.
 
-Overseer adds:
+---
 
--   Persistent SQLite state store
--   Job queue
--   Worker daemon
--   Project registry
--   Deterministic project health telemetry
+## Current Capabilities
 
-**Current milestone:**\
-Phase 1 --- Deterministic Backbone\
-(SQLite + job queue + worker + telemetry)\
-No autonomy expansion.\
-No architectural redesign.\
-Deterministic before intelligent.
+- Parse structured COGO-style legal description text
+- Parse quadrant bearings such as `N 45°32'10" E 100.23 FT`
+- Parse compact bearings such as `N45°32'10"E 100.23`
+- Parse cardinal calls such as `E 100`
+- Parse selected curve calls with radius, handedness, delta, or arc length
+- Build coordinate geometry from parsed calls
+- Preview parcel geometry in a desktop UI
+- Validate closure / misclosure
+- Export geometry to DXF and GeoJSON
 
-------------------------------------------------------------------------
+---
 
-# Quick Start
+## Project Structure
 
-``` bash
-# 1. Clone and setup
-cd local-code-assistant
-chmod +x setup.sh run.sh
-./setup.sh
-
-# 2. Start LM Studio and load a model (e.g., Qwen 14B)
-
-# 3. Run Forge pointed at your repo
-REPO_PATH=/path/to/your/project ./run.sh
-
-# 4. Open http://localhost:5173
-```
-
-------------------------------------------------------------------------
-
-# Architecture Overview
-
-Execution Layer (Forge): - React + Vite frontend - FastAPI backend -
-AgentService → DiffService → GitService pipeline - SSE streaming -
-Scoped file injection - Unified diff validation
-
-Backbone Layer (Phase 1): - SQLite state_store - Job queue - Worker
-daemon - Project registry - Telemetry engine
-
-LLM Layer: - LM Studio / Ollama / vLLM / OpenAI-compatible endpoint
-
-------------------------------------------------------------------------
-
-# Core Features
-
--   Two-panel layout: chat left, diff preview right
--   Streaming token display via SSE
--   Unified diff generation with syntax highlighting
--   Apply / Reject / Retry controls
--   Keyboard shortcuts: ⌘⏎ Apply, ⌘⌫ Reject, ⌘R Retry
-
-------------------------------------------------------------------------
-
-# Safety Guarantees
-
--   git apply --check before patch application
--   Scoped file validation
--   Diff format validation
--   Markdown fence stripping
--   Path traversal protection
--   No silent merges
--   Hard retry caps
--   Auto-commit requires explicit configuration
-
-------------------------------------------------------------------------
-
-# Phase Structure
-
-  Layer                 Responsibility
-  --------------------- -------------------------------------------
-  Execution             Diff generation + validation + git safety
-  Backbone (Phase 1)    Persistence + queue + telemetry
-  Escalation (Future)   Structured repair via LLM
-  Integration           UI surface + job visibility
-
-------------------------------------------------------------------------
-
-# Design Principles
-
--   Deterministic \> Generative
--   Git is the transaction boundary
--   No silent file mutations
--   No auto-merge
--   Persistence before intelligence
--   LLMs are escalation tools, not default tools
-
-------------------------------------------------------------------------
-
-# Current Status
-
-Forge: - Stable execution engine - Safe diff validation pipeline -
-Human-controlled workflow
-
-Overseer Phase 1: - Deterministic backbone in progress - No autonomy
-features yet - Infrastructure-first build
-
-------------------------------------------------------------------------
-
-# Future Direction (Post-Backbone)
-
--   Self-healing validation loop
--   Structured repair service
--   Health scoring
--   Cross-repo telemetry
--   Predictive maintenance
-
-Autonomy will only be added after deterministic infrastructure is proven
-stable.
-
-------------------------------------------------------------------------
-
-Last updated: 2026-02-26 16:43:16 UTC
+```text
+parcel_engine/
+├── exporters/
+│   ├── dxf.py
+│   ├── geojson.py
+│   └── shapefile.py
+├── geometry/
+│   ├── bearings.py
+│   ├── builder.py
+│   ├── commencement.py
+│   ├── curves.py
+│   ├── hierarchy.py
+│   └── lines.py
+├── models/
+│   ├── errors.py
+│   └── schema.py
+├── transcription/
+│   ├── parser.py
+│   ├── validator.py
+│   └── llm_contract.md
+├── validation/
+│   ├── closure.py
+│   ├── curve_checks.py
+│   ├── intersections.py
+│   └── report.py
+├── ui/
+│   ├── desktop_app.py
+│   ├── live_renderer.py
+│   └── state.py
+├── tests/
+├── main.py
+├── requirements.txt
+├── pyproject.toml
+└── README.md
