@@ -44,6 +44,7 @@ except Exception:
 from exporters.dxf import export_dxf
 from geometry.builder import build_geometry
 from transcription.parser_v2 import parse_legal_description
+from ui.manual_courses import build_manual_line
 
 Point = Tuple[float, float]
 
@@ -294,7 +295,18 @@ class ParcelDesktopApp(QMainWindow):
             ["ID", "Type", "Direction", "Distance", "Radius", "Delta"]
         )
         self.course_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.course_table.setSelectionBehavior(QTableWidget.SelectRows)
         left_layout.addWidget(self.course_table, stretch=3)
+
+        row_button_row = QHBoxLayout()
+        add_row_btn = QPushButton("Add Row")
+        add_row_btn.clicked.connect(self.add_manual_row)
+        row_button_row.addWidget(add_row_btn)
+
+        del_row_btn = QPushButton("Delete Selected Row")
+        del_row_btn.clicked.connect(self.delete_selected_row)
+        row_button_row.addWidget(del_row_btn)
+        left_layout.addLayout(row_button_row)
 
         right = QWidget()
         right_layout = QVBoxLayout(right)
@@ -407,12 +419,79 @@ class ParcelDesktopApp(QMainWindow):
         if errors:
             QMessageBox.warning(self, "Parse Issues", "\n".join(errors))
 
+    def add_manual_row(self) -> None:
+        row = self.course_table.rowCount()
+        self.course_table.insertRow(row)
+        self.course_table.setItem(row, 0, QTableWidgetItem(f"L{row + 1}"))
+        self.course_table.setItem(row, 1, QTableWidgetItem("Line"))
+        for col in (2, 3, 4, 5):
+            self.course_table.setItem(row, col, QTableWidgetItem(""))
+        self.course_table.editItem(self.course_table.item(row, 2))
+
+    def delete_selected_row(self) -> None:
+        selection = self.course_table.selectionModel()
+        if selection is None:
+            return
+        rows = sorted({i.row() for i in selection.selectedIndexes()}, reverse=True)
+        if not rows:
+            return
+        for row in rows:
+            self.course_table.removeRow(row)
+
+    def _calls_from_table(self) -> list:
+        calls = []
+        errors = []
+        for row in range(self.course_table.rowCount()):
+            type_item = self.course_table.item(row, 1)
+            dir_item = self.course_table.item(row, 2)
+            dist_item = self.course_table.item(row, 3)
+
+            row_type = (type_item.text() if type_item else "").strip().lower()
+            direction = dir_item.text() if dir_item else ""
+            distance = dist_item.text() if dist_item else ""
+
+            if not direction.strip() and not distance.strip():
+                continue
+
+            if row_type and row_type not in ("line", ""):
+                errors.append(
+                    f"Row {row + 1}: type {row_type!r} not supported (line only)"
+                )
+                continue
+
+            try:
+                call = build_manual_line(direction, distance, len(calls) + 1)
+            except ValueError as exc:
+                errors.append(f"Row {row + 1}: {exc}")
+                continue
+            calls.append(call)
+
+        if errors:
+            raise ValueError("\n".join(errors))
+        return calls
+
     def _build_result(self) -> None:
-        if not self.calls:
+        try:
+            calls = self._calls_from_table()
+        except ValueError as exc:
+            QMessageBox.warning(self, "Row Errors", str(exc))
+            self.result = None
+            return
+
+        if not calls:
+            # Table empty — fall back to parsing the text input once.
             self.parse_legal_text()
-            if not self.calls:
+            try:
+                calls = self._calls_from_table()
+            except ValueError as exc:
+                QMessageBox.warning(self, "Row Errors", str(exc))
                 self.result = None
                 return
+            if not calls:
+                self.result = None
+                return
+
+        self.calls = calls
 
         start_point = self._get_start_point()
         result = build_geometry(start_point=start_point, calls=self.calls)
