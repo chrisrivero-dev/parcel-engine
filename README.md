@@ -73,3 +73,43 @@ parcel_engine/
 ├── requirements.txt
 ├── pyproject.toml
 └── README.md
+
+---
+
+## OCR Setup
+
+Parcel Engine supports loading a legal-description image and running OCR
+to populate the source text box. OCR is optional — manual paste/edit of
+legal descriptions works without it.
+
+To enable **Load Image OCR**:
+
+1. Install the Python libraries:
+
+   ```
+   pip install pytesseract Pillow
+   ```
+
+2. Install the **Tesseract** executable:
+
+   - Windows: https://github.com/UB-Mannheim/tesseract/wiki
+   - macOS: `brew install tesseract`
+   - Linux: `sudo apt install tesseract-ocr`
+
+3. Either add the Tesseract install folder to your `PATH`, or set the
+   `PARCEL_ENGINE_TESSERACT` environment variable to the full path of
+   the executable, for example:
+
+   ```
+   setx PARCEL_ENGINE_TESSERACT "C:\Program Files\Tesseract-OCR\tesseract.exe"
+   ```
+
+When you click **Load Image OCR**, the app resolves Tesseract in this
+order:
+
+1. `PARCEL_ENGINE_TESSERACT` environment variable
+2. Common Windows install locations (`C:\Program Files\Tesseract-OCR\…`)
+3. `tesseract` on `PATH`
+
+If none of these resolve, the app shows a setup dialog explaining the
+options instead of crashing.

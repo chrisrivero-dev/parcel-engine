@@ -33,10 +33,6 @@ from PySide6.QtWidgets import (
 try:
     import pytesseract
     from PIL import Image
-
-    _tesseract_path = os.environ.get("PARCEL_ENGINE_TESSERACT")
-    if _tesseract_path:
-        pytesseract.pytesseract.tesseract_cmd = _tesseract_path
 except Exception:
     pytesseract = None
     Image = None
@@ -45,6 +41,7 @@ from exporters.dxf import export_dxf
 from geometry.builder import build_geometry
 from transcription.parser_v2 import parse_legal_description
 from ui.manual_courses import build_manual_line
+from ui.ocr_config import OCR_SETUP_MESSAGE, resolve_tesseract_path
 
 Point = Tuple[float, float]
 
@@ -704,6 +701,23 @@ class ParcelDesktopApp(QMainWindow):
         self.canvas.zoom_to_fit()
 
     def load_image_ocr(self) -> None:
+        if pytesseract is None or Image is None:
+            QMessageBox.information(
+                self,
+                "OCR Not Installed",
+                "OCR Python libraries are not installed.\n\n"
+                "Install them with:\n    pip install pytesseract Pillow\n\n"
+                "Manual paste/edit of legal descriptions still works without OCR.",
+            )
+            return
+
+        tesseract_path = resolve_tesseract_path()
+        if tesseract_path is None:
+            QMessageBox.information(self, "Tesseract Not Found", OCR_SETUP_MESSAGE)
+            return
+
+        pytesseract.pytesseract.tesseract_cmd = tesseract_path
+
         file_path, _ = QFileDialog.getOpenFileName(
             self,
             "Open Legal Description Image",
@@ -712,14 +726,6 @@ class ParcelDesktopApp(QMainWindow):
         )
 
         if not file_path:
-            return
-
-        if pytesseract is None or Image is None:
-            QMessageBox.critical(
-                self,
-                "OCR Missing",
-                "Install OCR first:\n\npip install pytesseract Pillow",
-            )
             return
 
         try:
