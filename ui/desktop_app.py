@@ -196,6 +196,8 @@ class ParcelDesktopApp(QMainWindow):
 
         self.calls = []
         self.result = None
+        self._last_errors_count = 0
+        self._last_ties_count = 0
 
         self._build_toolbar()
         self._build_ui()
@@ -308,6 +310,36 @@ class ParcelDesktopApp(QMainWindow):
         row_button_row.addWidget(del_row_btn)
         left_layout.addLayout(row_button_row)
 
+        move_row_row = QHBoxLayout()
+        up_btn = QPushButton("Move Row Up")
+        up_btn.clicked.connect(self.move_row_up)
+        move_row_row.addWidget(up_btn)
+
+        down_btn = QPushButton("Move Row Down")
+        down_btn.clicked.connect(self.move_row_down)
+        move_row_row.addWidget(down_btn)
+
+        clear_btn = QPushButton("Clear Rows")
+        clear_btn.clicked.connect(self.clear_rows)
+        move_row_row.addWidget(clear_btn)
+        left_layout.addLayout(move_row_row)
+
+        summary_label = QLabel("Parse Summary")
+        summary_label.setStyleSheet("font-size: 16px; font-weight: 600;")
+        left_layout.addWidget(summary_label)
+
+        summary_panel = QWidget()
+        summary_layout = QFormLayout(summary_panel)
+        self.summary_boundary_count = QLabel("0")
+        self.summary_ties_count = QLabel("0")
+        self.summary_errors_count = QLabel("0")
+        self.summary_closure = QLabel("-")
+        summary_layout.addRow("Boundary Calls:", self.summary_boundary_count)
+        summary_layout.addRow("Connection / Reference Ties:", self.summary_ties_count)
+        summary_layout.addRow("Parse Errors:", self.summary_errors_count)
+        summary_layout.addRow("Closure Misclose:", self.summary_closure)
+        left_layout.addWidget(summary_panel)
+
         right = QWidget()
         right_layout = QVBoxLayout(right)
 
@@ -379,6 +411,8 @@ class ParcelDesktopApp(QMainWindow):
 
         calls, reference_ties, errors = parse_legal_description(text)
         self.calls = calls
+        self._last_errors_count = len(errors)
+        self._last_ties_count = len(reference_ties)
 
         self.course_table.setRowCount(len(calls))
 
@@ -416,6 +450,8 @@ class ParcelDesktopApp(QMainWindow):
             for col, value in enumerate(values):
                 self.course_table.setItem(row, col, QTableWidgetItem(str(value)))
 
+        self._update_summary()
+
         if errors:
             QMessageBox.warning(self, "Parse Issues", "\n".join(errors))
 
@@ -437,6 +473,58 @@ class ParcelDesktopApp(QMainWindow):
             return
         for row in rows:
             self.course_table.removeRow(row)
+        self._renumber_course_ids()
+        self._update_summary()
+
+    def _selected_course_row(self) -> int:
+        selection = self.course_table.selectionModel()
+        if selection is None:
+            return -1
+        rows = sorted({i.row() for i in selection.selectedIndexes()})
+        return rows[0] if rows else -1
+
+    def _swap_course_rows(self, a: int, b: int) -> None:
+        cols = self.course_table.columnCount()
+        for col in range(cols):
+            ia = self.course_table.takeItem(a, col)
+            ib = self.course_table.takeItem(b, col)
+            self.course_table.setItem(a, col, ib if ib is not None else QTableWidgetItem(""))
+            self.course_table.setItem(b, col, ia if ia is not None else QTableWidgetItem(""))
+
+    def move_row_up(self) -> None:
+        row = self._selected_course_row()
+        if row <= 0:
+            QMessageBox.information(self, "Move Row Up", "Select a row below the first row to move it up.")
+            return
+        self._swap_course_rows(row, row - 1)
+        self.course_table.selectRow(row - 1)
+        self._renumber_course_ids()
+
+    def move_row_down(self) -> None:
+        row = self._selected_course_row()
+        last = self.course_table.rowCount() - 1
+        if row < 0 or row >= last:
+            QMessageBox.information(self, "Move Row Down", "Select a row above the last row to move it down.")
+            return
+        self._swap_course_rows(row, row + 1)
+        self.course_table.selectRow(row + 1)
+        self._renumber_course_ids()
+
+    def clear_rows(self) -> None:
+        self.course_table.setRowCount(0)
+        self.calls = []
+        self.result = None
+        self.summary_closure.setText("-")
+        self._update_summary()
+
+    def _renumber_course_ids(self) -> None:
+        for row in range(self.course_table.rowCount()):
+            self.course_table.setItem(row, 0, QTableWidgetItem(f"L{row + 1}"))
+
+    def _update_summary(self) -> None:
+        self.summary_boundary_count.setText(str(self.course_table.rowCount()))
+        self.summary_ties_count.setText(str(self._last_ties_count))
+        self.summary_errors_count.setText(str(self._last_errors_count))
 
     def _calls_from_table(self) -> list:
         calls = []
@@ -510,6 +598,8 @@ class ParcelDesktopApp(QMainWindow):
         self.closure_value.setText(str(closure.get("misclosure", "-")))
         self.intersections_value.setText(str(len(intersections)))
         self.curve_errors_value.setText(str(len(curve_errors)))
+        self.summary_closure.setText(str(closure.get("misclosure", "-")))
+        self._update_summary()
 
     def build_parcel(self) -> None:
         try:
