@@ -340,6 +340,26 @@ class ParcelDesktopApp(QMainWindow):
         summary_layout.addRow("Closure Misclose:", self.summary_closure)
         left_layout.addWidget(summary_panel)
 
+        ignored_label = QLabel("Ignored / Unparsed Text")
+        ignored_label.setStyleSheet("font-size: 16px; font-weight: 600;")
+        left_layout.addWidget(ignored_label)
+
+        ignored_note = QLabel(
+            "Review skipped text. Correct OCR/source text above, then click Parse Courses again."
+        )
+        ignored_note.setStyleSheet("font-size: 11px; color: #6b7280;")
+        ignored_note.setWordWrap(True)
+        left_layout.addWidget(ignored_note)
+
+        self.ignored_table = QTableWidget(0, 2)
+        self.ignored_table.setHorizontalHeaderLabels(["Type", "Text"])
+        self.ignored_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self.ignored_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.ignored_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.ignored_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.ignored_table.setWordWrap(True)
+        left_layout.addWidget(self.ignored_table, stretch=1)
+
         right = QWidget()
         right_layout = QVBoxLayout(right)
 
@@ -409,10 +429,19 @@ class ParcelDesktopApp(QMainWindow):
             QMessageBox.warning(self, "No Text", "Paste a legal description first.")
             return
 
-        calls, reference_ties, errors = parse_legal_description(text)
+        calls, reference_ties, errors, ignored_chunks = parse_legal_description(text)
         self.calls = calls
         self._last_errors_count = len(errors)
         self._last_ties_count = len(reference_ties)
+
+        self.ignored_table.setRowCount(len(ignored_chunks))
+        self.ignored_table.verticalHeader().setDefaultSectionSize(48)
+        for row, ic in enumerate(ignored_chunks):
+            type_item = QTableWidgetItem(ic.get("type", ""))
+            text_item = QTableWidgetItem(ic.get("text", ""))
+            text_item.setToolTip(ic.get("text", ""))
+            self.ignored_table.setItem(row, 0, type_item)
+            self.ignored_table.setItem(row, 1, text_item)
 
         self.course_table.setRowCount(len(calls))
 

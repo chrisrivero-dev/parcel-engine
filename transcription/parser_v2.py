@@ -13,15 +13,36 @@ from transcription.classify import (
 )
 from transcription.normalize import normalize
 
+_BOILERPLATE_KEYWORDS = (
+    "COMMENCING",
+    "BEGINNING AT",
+    "POINT OF BEGINNING",
+)
+
+_REFERENCE_KEYWORDS = (
+    "TRACT",
+    "RECORDED",
+    "OFFICIAL RECORDS",
+    "MAP",
+    "COUNTY",
+    "LOT",
+    "SECTION",
+    "BLOCK",
+    "RIGHT-OF-WAY",
+    "RIGHT OF WAY",
+)
+
 
 def parse_legal_description(
     text: str,
-) -> Tuple[List[LineCall], List[Dict], List[str]]:
+) -> Tuple[List[LineCall], List[Dict], List[str], List[Dict]]:
     """
     Parse a metes-and-bounds legal description into:
-      - calls: boundary LineCall list (in order, ready for build_geometry)
-      - ties:  informational dicts (commencement legs and reference ties)
-      - errors: unparsed clauses
+      - calls:           boundary LineCall list (ready for build_geometry)
+      - ties:            commencement legs and reference ties
+      - errors:          unparsed clauses that couldn't be classified
+      - ignored_chunks:  NOTE chunks shown in the OCR review panel
+                         each dict has {"type": str, "text": str}
 
     Curves, OCR images, and closure synthesis are out of scope.
     """
@@ -31,6 +52,7 @@ def parse_legal_description(
     calls: List[LineCall] = []
     ties: List[Dict] = []
     errors: List[str] = []
+    ignored_chunks: List[Dict] = []
 
     tie_idx = 1
     line_idx = 1
@@ -65,25 +87,12 @@ def parse_legal_description(
             tie_idx += 1
         elif chunk.kind == KIND_NOTE:
             upper = chunk.raw.upper()
-            if any(
-                k in upper
-                for k in (
-                    "COMMENCING",
-                    "BEGINNING AT",
-                    "POINT OF BEGINNING",
-                    "TRACT",
-                    "RECORDED",
-                    "OFFICIAL RECORDS",
-                    "MAP",
-                    "COUNTY",
-                    "LOT",
-                    "SECTION",
-                    "BLOCK",
-                    "RIGHT-OF-WAY",
-                    "RIGHT OF WAY",
-                )
-            ):
-                continue
-            errors.append(f"UNKNOWN_ELEMENT: '{chunk.raw}'")
+            if any(k in upper for k in _BOILERPLATE_KEYWORDS):
+                ignored_chunks.append({"type": "Boilerplate", "text": chunk.raw})
+            elif any(k in upper for k in _REFERENCE_KEYWORDS):
+                ignored_chunks.append({"type": "Reference / Context", "text": chunk.raw})
+            else:
+                ignored_chunks.append({"type": "Unknown / Unparsed", "text": chunk.raw})
+                errors.append(f"UNKNOWN_ELEMENT: '{chunk.raw}'")
 
-    return calls, ties, errors
+    return calls, ties, errors, ignored_chunks

@@ -32,7 +32,7 @@ def index():
 
         text = request.form["legal"]
 
-        calls, _ties, errors = parse_legal_description(text)
+        calls, _ties, errors, _ignored = parse_legal_description(text)
 
         if errors:
             return f"Parse Errors: {errors}"

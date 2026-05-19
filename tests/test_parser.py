@@ -15,7 +15,7 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 def test_parse_quadrant_line():
     text = 'N 54°32\'10" E 100.23'
-    calls, ties, errors = parse_legal_description(text)
+    calls, ties, errors, ignored = parse_legal_description(text)
 
     assert errors == []
     assert len(calls) == 1
@@ -25,7 +25,7 @@ def test_parse_quadrant_line():
 def test_parse_compact_quadrant_line():
     text = 'N45°32\'10"E 100.23'
 
-    calls, ties, errors = parse_legal_description(text)
+    calls, ties, errors, ignored = parse_legal_description(text)
 
     assert errors == []
     assert len(calls) == 1
@@ -35,7 +35,7 @@ def test_parse_compact_quadrant_line():
 def test_parse_wordy_quadrant_line():
     text = 'North 45°32\'10" East 100.23 feet'
 
-    calls, ties, errors = parse_legal_description(text)
+    calls, ties, errors, ignored = parse_legal_description(text)
 
     assert errors == []
     assert len(calls) == 1
@@ -45,7 +45,7 @@ def test_parse_wordy_quadrant_line():
 def test_parse_optional_seconds_line():
     text = 'N 45°32\' E 100.23'
 
-    calls, ties, errors = parse_legal_description(text)
+    calls, ties, errors, ignored = parse_legal_description(text)
 
     assert errors == []
     assert len(calls) == 1
@@ -54,7 +54,7 @@ def test_parse_optional_seconds_line():
 
 def test_a_distance_of_phrasing():
     text = 'THENCE S 03°25\'14" E, a distance of 3.17 feet to a point for corner'
-    calls, ties, errors = parse_legal_description(text)
+    calls, ties, errors, ignored = parse_legal_description(text)
 
     assert errors == []
     assert len(calls) == 1
@@ -63,7 +63,7 @@ def test_a_distance_of_phrasing():
 
 def test_curly_quote_ocr():
     text = 'THENCE S 03°25’14” E, a distance of 3.17 feet to a point for corner'
-    calls, ties, errors = parse_legal_description(text)
+    calls, ties, errors, ignored = parse_legal_description(text)
 
     assert errors == []
     assert len(calls) == 1
@@ -72,7 +72,7 @@ def test_curly_quote_ocr():
 
 def test_degrees_word_form():
     text = 'THENCE NORTH 03 DEGREES 25 MINUTES 14 SECONDS EAST 3.17 FEET'
-    calls, ties, errors = parse_legal_description(text)
+    calls, ties, errors, ignored = parse_legal_description(text)
 
     assert errors == []
     assert len(calls) == 1
@@ -82,7 +82,7 @@ def test_degrees_word_form():
 def test_parse_unknown_line_fails():
     text = "this is junk"
 
-    calls, ties, errors = parse_legal_description(text)
+    calls, ties, errors, ignored = parse_legal_description(text)
 
     assert calls == []
     assert ties == []
@@ -98,7 +98,7 @@ def test_said_point_being_is_tie_not_boundary():
         'BEGINNING AT A POINT, SAID POINT BEING N 50° 00\' 00" E, 100.00 FEET '
         'FROM A FOUND IRON ROD; THENCE N 89° 00\' 00" E 50.00 feet to a point.'
     )
-    calls, ties, errors = parse_legal_description(text)
+    calls, ties, errors, ignored = parse_legal_description(text)
 
     assert len(calls) == 1
     assert calls[0].distance.value == 50.00
@@ -115,7 +115,7 @@ def _load_reddleshire() -> str:
 
 def test_reddleshire_gold_standard():
     text = _load_reddleshire()
-    calls, ties, errors = parse_legal_description(text)
+    calls, ties, errors, ignored = parse_legal_description(text)
 
     assert errors == []
     assert len(calls) == 8
@@ -135,7 +135,7 @@ def test_reddleshire_gold_standard():
 
 def test_commencement_classified_separately():
     text = _load_reddleshire()
-    calls, ties, errors = parse_legal_description(text)
+    calls, ties, errors, ignored = parse_legal_description(text)
 
     commencement_ties = [t for t in ties if t["kind"] == "commencement"]
     assert len(commencement_ties) == 1
@@ -152,7 +152,7 @@ def test_commencement_classified_separately():
 
 def test_e2e_reddleshire_closes():
     text = _load_reddleshire()
-    calls, ties, errors = parse_legal_description(text)
+    calls, ties, errors, ignored = parse_legal_description(text)
 
     result = build_geometry(start_point=(0.0, 0.0), calls=calls)
     assert result["curves"] == []
@@ -178,7 +178,7 @@ def test_parse_precise_narrative_courses():
         '29\' 30" WEST 46.68 FEET TO THE POINT OF BEGINNING; SOUTH 49° 21\' 40" WEST 140.46 FEET.'
     )
 
-    calls, ties, errors = parse_legal_description(text)
+    calls, ties, errors, ignored = parse_legal_description(text)
 
     # No COMMENCING preamble → all bearing-bearing clauses are boundary.
     assert len(calls) == 5
@@ -203,7 +203,7 @@ def test_parse_complex_narrative_description():
         "THENCE NORTH 00° 12' 10\" WEST 130.10 FEET TO THE TRUE POINT OF BEGINNING."
     )
 
-    calls, ties, errors = parse_legal_description(text)
+    calls, ties, errors, ignored = parse_legal_description(text)
 
     # COMMENCING preamble → first THENCE-to-POB is commencement, not boundary.
     assert len(calls) == 4
@@ -227,7 +227,7 @@ def test_parse_long_form_prose_deed_courses():
         "THE POINT OF BEGINNING."
     )
 
-    calls, ties, errors = parse_legal_description(text)
+    calls, ties, errors, ignored = parse_legal_description(text)
 
     # No closure synthesis: exactly 3 boundary calls.
     assert len(calls) == 3

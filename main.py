@@ -25,7 +25,7 @@ def main() -> None:
         raise FileNotFoundError(f"Input file not found: {input_path}")
 
     text = input_path.read_text(encoding="utf-8")
-    calls, _reference_ties, parse_errors = parse_legal_description(text)
+    calls, _reference_ties, parse_errors, _ignored = parse_legal_description(text)
 
     if parse_errors:
         print("PARSE ERRORS:")
