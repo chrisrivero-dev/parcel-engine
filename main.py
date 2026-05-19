@@ -7,7 +7,7 @@ from pathlib import Path
 from exporters.dxf import export_dxf
 from exporters.geojson import export_geojson
 from geometry.builder import build_geometry
-from transcription.parser import parse_legal_description
+from transcription.parser_v2 import parse_legal_description
 
 
 def main() -> None:
@@ -25,7 +25,7 @@ def main() -> None:
         raise FileNotFoundError(f"Input file not found: {input_path}")
 
     text = input_path.read_text(encoding="utf-8")
-    calls, parse_errors = parse_legal_description(text)
+    calls, _reference_ties, parse_errors = parse_legal_description(text)
 
     if parse_errors:
         print("PARSE ERRORS:")

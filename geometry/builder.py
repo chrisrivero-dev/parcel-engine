@@ -61,6 +61,7 @@ def build_geometry(*, start_point=(0.0, 0.0), calls):
     start_x, start_y = start_point
 
     points = [(start_x, start_y)]
+    curves: list = []
 
     current_x = start_x
     current_y = start_y
@@ -127,8 +128,17 @@ def build_geometry(*, start_point=(0.0, 0.0), calls):
             current_x, current_y = points[-1]
             current_azimuth_rad = (current_azimuth_rad + sign * delta_rad) % (2 * math.pi)
 
+            curves.append({
+                "center": (cx, cy),
+                "radius": radius,
+                "start_angle": start_angle,
+                "delta": delta_rad * sign,
+                "handedness": params.handedness.value,
+            })
+
     return {
         "points": points,
+        "curves": curves,
         "validation": {
             "closure": {
                 "misclosure": math.hypot(

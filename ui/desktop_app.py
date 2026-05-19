@@ -34,16 +34,16 @@ try:
     import pytesseract
     from PIL import Image
 
-    pytesseract.pytesseract.tesseract_cmd = (
-        r"C:\Users\crivero\AppData\Local\Programs\Tesseract-OCR\tesseract.exe"
-    )
+    _tesseract_path = os.environ.get("PARCEL_ENGINE_TESSERACT")
+    if _tesseract_path:
+        pytesseract.pytesseract.tesseract_cmd = _tesseract_path
 except Exception:
     pytesseract = None
     Image = None
 
 from exporters.dxf import export_dxf
 from geometry.builder import build_geometry
-from transcription.parser import parse_legal_description
+from transcription.parser_v2 import parse_legal_description
 
 Point = Tuple[float, float]
 
@@ -365,7 +365,7 @@ class ParcelDesktopApp(QMainWindow):
             QMessageBox.warning(self, "No Text", "Paste a legal description first.")
             return
 
-        calls, errors, reference_ties = parse_legal_description(text)
+        calls, reference_ties, errors = parse_legal_description(text)
         self.calls = calls
 
         self.course_table.setRowCount(len(calls))

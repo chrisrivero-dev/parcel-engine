@@ -2,7 +2,7 @@ from flask import Flask, request, send_file, render_template_string
 import tempfile
 import os
 
-from transcription.parser import parse_legal_description
+from transcription.parser_v2 import parse_legal_description
 from geometry.builder import build_geometry
 from exporters.dxf import export_dxf
 
@@ -32,7 +32,7 @@ def index():
 
         text = request.form["legal"]
 
-        calls, errors = parse_legal_description(text)
+        calls, _ties, errors = parse_legal_description(text)
 
         if errors:
             return f"Parse Errors: {errors}"
