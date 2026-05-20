@@ -174,6 +174,7 @@ class BaseCall(BaseModel):
     to_monument: Optional[str] = None
     along_feature: Optional[str] = None
     more_or_less: bool = False
+    source_span: Optional[Any] = None
 
 
 class CommencementCall(BaseCall):
