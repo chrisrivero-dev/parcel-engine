@@ -5,7 +5,7 @@ import sys
 from typing import List, Tuple
 
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer
-from PySide6.QtGui import QAction, QColor, QPainter, QPen, QPolygonF
+from PySide6.QtGui import QAction, QColor, QPainter, QPen, QPolygonF, QTextCursor
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -39,6 +39,7 @@ except Exception:
 
 from exporters.dxf import export_dxf
 from geometry.builder import build_geometry
+from transcription.normalize import normalize
 from transcription.parser_v2 import parse_legal_description
 from ui.manual_courses import build_manual_line
 from ui.ocr_config import OCR_SETUP_MESSAGE, resolve_tesseract_path
@@ -195,6 +196,7 @@ class ParcelDesktopApp(QMainWindow):
         self.result = None
         self._last_errors_count = 0
         self._last_ties_count = 0
+        self._ignored_chunks: list = []
 
         self._build_toolbar()
         self._build_ui()
@@ -295,6 +297,7 @@ class ParcelDesktopApp(QMainWindow):
         )
         self.course_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.course_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.course_table.itemSelectionChanged.connect(self._on_course_row_selected)
         left_layout.addWidget(self.course_table, stretch=3)
 
         row_button_row = QHBoxLayout()
@@ -355,6 +358,7 @@ class ParcelDesktopApp(QMainWindow):
         self.ignored_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.ignored_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.ignored_table.setWordWrap(True)
+        self.ignored_table.itemSelectionChanged.connect(self._on_ignored_row_selected)
         left_layout.addWidget(self.ignored_table, stretch=1)
 
         right = QWidget()
@@ -430,6 +434,7 @@ class ParcelDesktopApp(QMainWindow):
         self.calls = calls
         self._last_errors_count = len(errors)
         self._last_ties_count = len(reference_ties)
+        self._ignored_chunks = ignored_chunks
 
         self.ignored_table.setRowCount(len(ignored_chunks))
         self.ignored_table.verticalHeader().setDefaultSectionSize(48)
@@ -478,8 +483,40 @@ class ParcelDesktopApp(QMainWindow):
 
         self._update_summary()
 
+        # Replace displayed text with normalized form so span indices align for highlighting.
+        self.legal_input.setPlainText(normalize(text))
+
         if errors:
             QMessageBox.warning(self, "Parse Issues", "\n".join(errors))
+
+    def _highlight_source_span(self, span) -> None:
+        if span is None:
+            return
+        cursor = self.legal_input.textCursor()
+        cursor.setPosition(span.start)
+        cursor.setPosition(span.end, QTextCursor.KeepAnchor)
+        self.legal_input.setTextCursor(cursor)
+        self.legal_input.ensureCursorVisible()
+
+    def _on_course_row_selected(self) -> None:
+        sel = self.course_table.selectionModel()
+        if sel is None:
+            return
+        rows = sorted({i.row() for i in sel.selectedIndexes()})
+        if not rows or rows[0] >= len(self.calls):
+            return
+        span = getattr(self.calls[rows[0]], "source_span", None)
+        self._highlight_source_span(span)
+
+    def _on_ignored_row_selected(self) -> None:
+        sel = self.ignored_table.selectionModel()
+        if sel is None:
+            return
+        rows = sorted({i.row() for i in sel.selectedIndexes()})
+        if not rows or rows[0] >= len(self._ignored_chunks):
+            return
+        span = self._ignored_chunks[rows[0]].get("source_span")
+        self._highlight_source_span(span)
 
     def add_manual_row(self) -> None:
         row = self.course_table.rowCount()
