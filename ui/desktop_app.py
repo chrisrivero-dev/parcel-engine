@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QPlainTextEdit,
     QSplitter,
+    QTabWidget,
     QTableWidget,
     QTableWidgetItem,
     QToolBar,
@@ -42,6 +43,7 @@ from exporters.dxf import export_dxf
 from geometry.builder import build_geometry
 from transcription.normalize import normalize
 from transcription.parser_v2 import parse_legal_description
+from ui.image_viewer import ReferenceImageViewer
 from ui.manual_courses import build_manual_line
 from ui.ocr_config import OCR_SETUP_MESSAGE, resolve_tesseract_path
 
@@ -231,6 +233,10 @@ class ParcelDesktopApp(QMainWindow):
         ocr_action.triggered.connect(self.load_image_ocr)
         toolbar.addAction(ocr_action)
 
+        ref_image_action = QAction("Load Reference Image", self)
+        ref_image_action.triggered.connect(self.load_reference_image)
+        toolbar.addAction(ref_image_action)
+
     def _build_ui(self) -> None:
         main = QWidget()
         self.setCentralWidget(main)
@@ -366,12 +372,14 @@ class ParcelDesktopApp(QMainWindow):
         right = QWidget()
         right_layout = QVBoxLayout(right)
 
-        canvas_label = QLabel("Parcel Preview")
-        canvas_label.setStyleSheet("font-size: 16px; font-weight: 600;")
-        right_layout.addWidget(canvas_label)
+        self.preview_tabs = QTabWidget()
+        right_layout.addWidget(self.preview_tabs, stretch=4)
 
         self.canvas = ParcelCanvas()
-        right_layout.addWidget(self.canvas, stretch=4)
+        self.preview_tabs.addTab(self.canvas, "Parcel Preview")
+
+        self.reference_image_viewer = ReferenceImageViewer()
+        self.preview_tabs.addTab(self.reference_image_viewer, "Reference Image")
 
         validation_label = QLabel("Validation")
         validation_label.setStyleSheet("font-size: 16px; font-weight: 600;")
@@ -745,6 +753,26 @@ class ParcelDesktopApp(QMainWindow):
 
     def zoom_to_fit(self) -> None:
         self.canvas.zoom_to_fit()
+
+    def load_reference_image(self) -> None:
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Open Reference Image",
+            "",
+            ReferenceImageViewer.SUPPORTED_FILTER,
+        )
+        if not file_path:
+            return
+
+        if not self.reference_image_viewer.load(file_path):
+            QMessageBox.warning(
+                self,
+                "Image Load Failed",
+                f"Could not read image:\n{file_path}",
+            )
+            return
+
+        self.preview_tabs.setCurrentWidget(self.reference_image_viewer)
 
     def load_image_ocr(self) -> None:
         if pytesseract is None or Image is None:
