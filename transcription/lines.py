@@ -55,6 +55,23 @@ LINE_NARRATIVE_RE = re.compile(
     re.IGNORECASE | re.VERBOSE,
 )
 
+# Deed-style clauses where the bearing and distance are separated by a
+# longer context phrase that may itself contain commas, e.g.
+#   SOUTH 47°45'30" WEST, ALONG THE SOUTHERLY LINE OF SAID LAND, 120 FEET
+# The context body forbids digits and semicolons so we cannot accidentally
+# skip past the real distance or cross a clause boundary, and the
+# mandatory feet/foot/ft anchor prevents grabbing area or count tokens
+# (e.g. "10 ACRES") that happen to appear in the context.
+LINE_DEED_RE = re.compile(
+    _BEARING + r"""
+    \s*,?\s*
+    (?P<context>[^\d;]{1,250}?)
+    (?P<dist>\d+(?:\.\d+)?)
+    \s+(?:feet|foot|ft)\b
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
 
 def _build_line_call(match: re.Match, idx: int) -> LineCall:
     ns = _WORD_TO_CARDINAL[match.group("ns").upper()]
@@ -93,6 +110,8 @@ def parse_line_chunk(text: str, idx: int) -> LineCall | None:
     match = LINE_CLEAN_RE.search(text)
     if match is None:
         match = LINE_NARRATIVE_RE.search(text)
+    if match is None:
+        match = LINE_DEED_RE.search(text)
     if match is None:
         return None
     return _build_line_call(match, idx)
