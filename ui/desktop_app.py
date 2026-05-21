@@ -37,6 +37,7 @@ except Exception:
     pytesseract = None
     Image = None
 
+from domain.project import ParcelProject
 from exporters.dxf import export_dxf
 from geometry.builder import build_geometry
 from transcription.normalize import normalize
@@ -197,6 +198,7 @@ class ParcelDesktopApp(QMainWindow):
         self._last_errors_count = 0
         self._last_ties_count = 0
         self._ignored_chunks: list = []
+        self.project: ParcelProject = ParcelProject()
 
         self._build_toolbar()
         self._build_ui()
@@ -435,6 +437,13 @@ class ParcelDesktopApp(QMainWindow):
         self._last_errors_count = len(errors)
         self._last_ties_count = len(reference_ties)
         self._ignored_chunks = ignored_chunks
+        self.project = ParcelProject.from_parse_result(
+            source_text=text,
+            calls=calls,
+            reference_ties=reference_ties,
+            errors=errors,
+            ignored_chunks=ignored_chunks,
+        )
 
         self.ignored_table.setRowCount(len(ignored_chunks))
         self.ignored_table.verticalHeader().setDefaultSectionSize(48)
