@@ -46,6 +46,7 @@ from transcription.parser_v2 import parse_legal_description
 from ui.image_viewer import ReferenceImageViewer
 from ui.manual_courses import build_manual_line
 from ui.ocr_config import OCR_SETUP_MESSAGE, resolve_tesseract_path
+from ui.ocr_runner import OcrFailed, PytesseractMissing, TesseractNotFound, run_ocr
 
 Point = Tuple[float, float]
 
@@ -270,6 +271,28 @@ class ParcelDesktopApp(QMainWindow):
             'S 00°00\'00" W 100'
         )
         left_layout.addWidget(self.legal_input, stretch=3)
+
+        ocr_draft_label = QLabel("OCR Draft (review and edit before accepting)")
+        ocr_draft_label.setStyleSheet("font-size: 13px; font-weight: 600; color: #6b7280;")
+        left_layout.addWidget(ocr_draft_label)
+
+        self.ocr_draft_input = QPlainTextEdit()
+        self.ocr_draft_input.setPlaceholderText(
+            "Run OCR to Draft after loading a reference image. "
+            "Correct the text here, then click Accept OCR Text."
+        )
+        left_layout.addWidget(self.ocr_draft_input, stretch=2)
+
+        ocr_draft_buttons = QHBoxLayout()
+        run_ocr_draft_btn = QPushButton("Run OCR to Draft")
+        run_ocr_draft_btn.clicked.connect(self.run_ocr_to_draft)
+        ocr_draft_buttons.addWidget(run_ocr_draft_btn)
+
+        accept_ocr_btn = QPushButton("Accept OCR Text")
+        accept_ocr_btn.clicked.connect(self.accept_ocr_draft)
+        ocr_draft_buttons.addWidget(accept_ocr_btn)
+        ocr_draft_buttons.addStretch(1)
+        left_layout.addLayout(ocr_draft_buttons)
 
         button_row = QHBoxLayout()
 
@@ -773,6 +796,41 @@ class ParcelDesktopApp(QMainWindow):
             return
 
         self.preview_tabs.setCurrentWidget(self.reference_image_viewer)
+
+    def run_ocr_to_draft(self) -> None:
+        image_path = self.reference_image_viewer.current_path
+        if not image_path:
+            QMessageBox.information(
+                self,
+                "No Reference Image",
+                "Load a reference image first via Load Reference Image.",
+            )
+            return
+
+        try:
+            text = run_ocr(image_path)
+        except PytesseractMissing as exc:
+            QMessageBox.information(self, "OCR Not Installed", str(exc))
+            return
+        except TesseractNotFound:
+            QMessageBox.information(self, "Tesseract Not Found", OCR_SETUP_MESSAGE)
+            return
+        except OcrFailed as exc:
+            QMessageBox.critical(self, "OCR Failed", str(exc))
+            return
+
+        self.ocr_draft_input.setPlainText(text)
+
+    def accept_ocr_draft(self) -> None:
+        draft = self.ocr_draft_input.toPlainText()
+        if not draft.strip():
+            QMessageBox.information(
+                self,
+                "Empty OCR Draft",
+                "OCR Draft is empty. Run OCR to Draft first, or edit the draft text.",
+            )
+            return
+        self.legal_input.setPlainText(draft)
 
     def load_image_ocr(self) -> None:
         if pytesseract is None or Image is None:

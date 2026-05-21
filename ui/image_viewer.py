@@ -20,6 +20,7 @@ class ReferenceImageViewer(QWidget):
         super().__init__(parent)
 
         self._pixmap: QPixmap | None = None
+        self._current_path: str | None = None
 
         self._label = QLabel("No reference image loaded.")
         self._label.setAlignment(Qt.AlignCenter)
@@ -40,14 +41,20 @@ class ReferenceImageViewer(QWidget):
         if pixmap.isNull():
             return False
         self._pixmap = pixmap
+        self._current_path = file_path
         self._label.setStyleSheet("")
         self._rescale()
         return True
 
     def clear(self) -> None:
         self._pixmap = None
+        self._current_path = None
         self._label.setStyleSheet("color: #6b7280;")
         self._label.setText("No reference image loaded.")
+
+    @property
+    def current_path(self) -> str | None:
+        return self._current_path
 
     def resizeEvent(self, event) -> None:  # noqa: N802 (Qt API)
         super().resizeEvent(event)
