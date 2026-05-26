@@ -1,6 +1,7 @@
 import math
 
-from models.schema import LineCall, CurveCall, Handedness
+from geometry.curves import compute_tangent_curve
+from models.schema import LineCall, CurveCall, Handedness, CurveType
 
 def dms_to_degrees(dms):
     return (
@@ -93,51 +94,52 @@ def build_geometry(*, start_point=(0.0, 0.0), calls):
         elif isinstance(call, CurveCall):
             params = call.params
 
-            if params.radius is None or params.handedness is None:
+            # Render only when the curve direction is explicit. Concavity alone
+            # cannot resolve left/right without the incoming traverse direction,
+            # so such curves are left unrendered (no fabricated geometry).
+            if params.handedness is None:
+                continue
+            if params.radius is None:
+                continue
+            if params.delta is None and params.arc_length is None:
                 continue
 
-            radius = params.radius
-
-            # --- delta ---
             if params.delta is not None:
                 delta_deg = dms_to_degrees(params.delta)
-            elif params.arc_length is not None:
-                delta_deg = (params.arc_length / radius) * (180 / math.pi)
             else:
+                delta_deg = (params.arc_length / params.radius) * (180.0 / math.pi)
+
+            incoming_az_deg = math.degrees(current_azimuth_rad)
+
+            # The traverse supplies the incoming tangent, so render as a tangent
+            # arc using the deterministic, tested curve solver.
+            tangent_params = params.model_copy(update={"curve_type": CurveType.TANGENT})
+            segments = max(12, int(abs(delta_deg)))
+
+            try:
+                end_pt, arc_pts = compute_tangent_curve(
+                    (current_x, current_y),
+                    incoming_az_deg,
+                    tangent_params,
+                    segments_per_curve=segments,
+                )
+            except ValueError:
                 continue
 
-            delta_rad = math.radians(delta_deg)
+            points.extend(arc_pts)
+            current_x, current_y = end_pt
 
-            # RIGHT = clockwise
-            sign = -1 if params.handedness == Handedness.RIGHT else 1
-
-            # --- center ---
-            cx = current_x + radius * math.cos(current_azimuth_rad + sign * math.pi / 2)
-            cy = current_y + radius * math.sin(current_azimuth_rad + sign * math.pi / 2)
-
-            # --- start angle ---
-            start_angle = math.atan2(current_y - cy, current_x - cx)
-
-            # --- arc points ---
-            steps = max(12, int(abs(delta_deg)))
-
-            for i in range(1, steps + 1):
-                angle = start_angle + sign * (delta_rad * i / steps)
-                points.append((
-                    cx + radius * math.cos(angle),
-                    cy + radius * math.sin(angle),
-                ))
-
-            # --- update position and tangent azimuth ---
-            current_x, current_y = points[-1]
-            current_azimuth_rad = (current_azimuth_rad + sign * delta_rad) % (2 * math.pi)
+            # RIGHT turns increase azimuth clockwise; LEFT turns decrease it.
+            sign_az = 1.0 if params.handedness == Handedness.RIGHT else -1.0
+            current_azimuth_rad = math.radians(
+                incoming_az_deg + sign_az * delta_deg
+            ) % (2 * math.pi)
 
             curves.append({
-                "center": (cx, cy),
-                "radius": radius,
-                "start_angle": start_angle,
-                "delta": delta_rad * sign,
+                "radius": params.radius,
+                "delta_deg": delta_deg,
                 "handedness": params.handedness.value,
+                "end_point": end_pt,
             })
 
     return {

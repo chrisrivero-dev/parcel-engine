@@ -1,3 +1,5 @@
+import math
+
 import pytest
 
 from geometry.builder import build_geometry
@@ -123,3 +125,88 @@ def test_builder_line_then_curve():
 
     assert len(result["points"]) > 5
     assert len(result["curves"]) == 1
+
+# ============================================================
+# Minimal curve rendering (explicit handedness only)
+# ============================================================
+
+def _north_100() -> LineCall:
+    return LineCall(
+        id="L1",
+        raw_text="N 100",
+        bearing=Bearing(
+            raw_text="N",
+            format=BearingFormat.AZIMUTH,
+            value=azimuth(0.0),
+            basis=DirectionBasis.TRUE,
+        ),
+        distance=dist(100.0),
+    )
+
+
+def test_curve_renders_with_handedness_and_delta_endpoint():
+    """Right quarter circle from (0,100) heading North -> endpoint (50,150)."""
+    calls = [
+        _north_100(),
+        CurveCall(
+            id="C1",
+            raw_text="curve right R50 delta 90",
+            params=CurveParams(
+                curve_type=CurveType.TANGENT,
+                radius=50.0,
+                handedness=Handedness.RIGHT,
+                delta=DMS(deg=90, minutes=0, seconds=0),
+            ),
+        ),
+    ]
+
+    result = build_geometry(start_point=(0.0, 0.0), calls=calls)
+
+    assert len(result["curves"]) == 1
+    assert result["points"][-1] == pytest.approx((50.0, 150.0), abs=1e-6)
+
+
+def test_curve_renders_with_handedness_and_arc_length():
+    """Arc length 50*(pi/2) over radius 50 == 90 degrees."""
+    arc = 50.0 * (math.pi / 2.0)
+    calls = [
+        _north_100(),
+        CurveCall(
+            id="C1",
+            raw_text="curve right R50 arc",
+            params=CurveParams(
+                curve_type=CurveType.NON_TANGENT,
+                radius=50.0,
+                handedness=Handedness.RIGHT,
+                arc_length=arc,
+            ),
+        ),
+    ]
+
+    result = build_geometry(start_point=(0.0, 0.0), calls=calls)
+
+    assert len(result["curves"]) == 1
+    assert result["points"][-1] == pytest.approx((50.0, 150.0), abs=1e-6)
+
+
+def test_curve_without_handedness_is_skipped():
+    """No handedness -> curve must not render and must not fabricate geometry."""
+    calls = [
+        _north_100(),
+        CurveCall(
+            id="C1",
+            raw_text="curve concave easterly R50 arc",
+            params=CurveParams(
+                curve_type=CurveType.NON_TANGENT,
+                radius=50.0,
+                handedness=None,
+                arc_length=78.54,
+            ),
+        ),
+    ]
+
+    result = build_geometry(start_point=(0.0, 0.0), calls=calls)
+
+    assert result["curves"] == []
+    assert result["points"][-1] == pytest.approx((0.0, 100.0), abs=1e-6)
+
