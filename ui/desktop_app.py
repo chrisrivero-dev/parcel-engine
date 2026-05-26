@@ -259,10 +259,11 @@ class ParcelDesktopApp(QMainWindow):
         splitter.addWidget(self._build_image_pane())
         splitter.addWidget(self._build_review_pane())
         splitter.addWidget(self._build_output_pane())
-        splitter.setStretchFactor(0, 3)
-        splitter.setStretchFactor(1, 4)
-        splitter.setStretchFactor(2, 5)
-        splitter.setSizes([360, 520, 620])
+        # ~40 % image | ~33 % text review | ~27 % COGO output at 1 500 px wide
+        splitter.setStretchFactor(0, 4)
+        splitter.setStretchFactor(1, 3)
+        splitter.setStretchFactor(2, 3)
+        splitter.setSizes([600, 500, 400])
 
         layout = QHBoxLayout(main)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -372,7 +373,8 @@ class ParcelDesktopApp(QMainWindow):
         lines_layout.addWidget(self.ocr_lines_list, stretch=1)
         review_splitter.addWidget(lines_section)
 
-        review_splitter.setSizes([300, 220, 160])
+        # Legal tall, OCR Draft readable, OCR Lines enough to inspect
+        review_splitter.setSizes([340, 260, 160])
         pane_layout.addWidget(review_splitter, stretch=1)
 
         button_row = QHBoxLayout()
@@ -520,7 +522,8 @@ class ParcelDesktopApp(QMainWindow):
         preview_layout.addWidget(self.validation_panel)
 
         output_splitter.addWidget(preview_section)
-        output_splitter.setSizes([460, 440])
+        # COGO table + summary + ignored ~58 %, canvas + validation ~42 %
+        output_splitter.setSizes([520, 380])
 
         pane_layout.addWidget(output_splitter)
 
