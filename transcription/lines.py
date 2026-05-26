@@ -12,6 +12,36 @@ from models.schema import (
     QuadrantBearing,
 )
 
+# ---------------------------------------------------------------------------
+# OCR / punctuation normalisation for DMS bearings
+# ---------------------------------------------------------------------------
+#
+# Three independent substitutions applied in order.  Each is a no-op on clean
+# text so normalised == original for well-formed input.
+#
+# 1. Stray apostrophe before the degree digits: "South '50°…" → "South 50°…"
+_STRAY_APOSTROPHE_RE = re.compile(r"(?<!\d)'(?=\d{1,3}°)")
+
+# 2. Second °-symbol used as minutes separator: 50°00°00" → 50°00'00"
+_DOUBLE_DEGREE_RE = re.compile(r"(\d{1,3}°\d{1,2})°")
+
+# 3. First "-symbol used as minutes marker when no ' precedes it: 31°11" → 31°11'
+#    Runs after step 2, so a genuine seconds " is never in this position.
+_QUOTE_AS_MINUTES_RE = re.compile(r'(\d{1,3}°\d{1,2})"')
+
+
+def _normalize_bearing_punct(text: str) -> str:
+    """Fix common OCR/transcription errors in DMS bearing punctuation only.
+
+    Idempotent on clean text.  Does NOT correct direction-word typos such as
+    Fast or Bast — those require a separate OCR-correction pass with warnings.
+    """
+    text = _STRAY_APOSTROPHE_RE.sub("", text)
+    text = _DOUBLE_DEGREE_RE.sub(r"\1'", text)
+    text = _QUOTE_AS_MINUTES_RE.sub(r"\1'", text)
+    return text
+
+
 _WORD_TO_CARDINAL = {
     "NORTH": "N",
     "SOUTH": "S",
@@ -53,7 +83,10 @@ BEARING_RE = re.compile(_BEARING, re.IGNORECASE | re.VERBOSE)
 
 
 def has_bearing(text: str) -> bool:
-    return BEARING_RE.search(text) is not None
+    if BEARING_RE.search(text) is not None:
+        return True
+    normalized = _normalize_bearing_punct(text)
+    return normalized != text and BEARING_RE.search(normalized) is not None
 
 LINE_NARRATIVE_RE = re.compile(
     _BEARING + r"""
@@ -115,12 +148,21 @@ def _build_line_call(match: re.Match, idx: int) -> LineCall:
     )
 
 
+def _match_bearing(text: str) -> re.Match | None:
+    m = LINE_CLEAN_RE.search(text)
+    if m is None:
+        m = LINE_NARRATIVE_RE.search(text)
+    if m is None:
+        m = LINE_DEED_RE.search(text)
+    return m
+
+
 def parse_line_chunk(text: str, idx: int) -> LineCall | None:
-    match = LINE_CLEAN_RE.search(text)
+    match = _match_bearing(text)
     if match is None:
-        match = LINE_NARRATIVE_RE.search(text)
-    if match is None:
-        match = LINE_DEED_RE.search(text)
+        normalized = _normalize_bearing_punct(text)
+        if normalized != text:
+            match = _match_bearing(normalized)
     if match is None:
         return None
     return _build_line_call(match, idx)
