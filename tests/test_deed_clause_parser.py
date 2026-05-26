@@ -73,3 +73,89 @@ def test_existing_clean_calls_unchanged():
     assert calls[0].distance.value == 100.0
     assert calls[1].bearing.value.quadrant_ns == "S"
     assert calls[1].distance.value == 50.0
+
+
+# ---------------------------------------------------------------------------
+# OCR-fragmented deed calls (bearing and distance split by a stray semicolon)
+# ---------------------------------------------------------------------------
+
+def test_fragmented_bearing_distance_split_by_ocr_semicolon():
+    text = (
+        "THENCE SOUTH 34°39'40\" WEST ALONG. 'THE SOUTHEASTERLY LINE OF "
+        "SAID LOT; 113.31 FEET TO A POINT;"
+    )
+    calls, _, errors, _ = _parse_one(text)
+
+    assert errors == []
+    assert len(calls) == 1
+    call = calls[0]
+    assert call.bearing.value.quadrant_ns == "S"
+    assert call.bearing.value.quadrant_ew == "W"
+    assert call.bearing.value.angle.deg == 34
+    assert call.bearing.value.angle.minutes == 39
+    assert call.bearing.value.angle.seconds == 40
+    assert call.distance.value == 113.31
+
+
+def test_existing_comma_context_clause_still_parses():
+    text = (
+        "THENCE SOUTH 47°45'30\" WEST, ALONG THE SOUTHWESTERLY LINE OF "
+        "SAID LAND CONVEYED TO SONGER, 120 FEET;"
+    )
+    calls, _, errors, _ = _parse_one(text)
+
+    assert errors == []
+    assert len(calls) == 1
+    assert calls[0].bearing.value.quadrant_ns == "S"
+    assert calls[0].bearing.value.quadrant_ew == "W"
+    assert calls[0].distance.value == 120.0
+
+
+def test_ocr_typo_each_for_east_is_not_inferred():
+    text = (
+        "THENCE NORTH 1°02' EACH ALONG THE WESTERLY LINE OF SAID LOT, "
+        "2.96 FEET;"
+    )
+    calls, _, _, ignored = _parse_one(text)
+
+    assert calls == []
+    assert len(ignored) >= 1
+
+
+def test_qualitative_direction_not_parsed_as_geometry():
+    text = "THENCE NORTHEASTERLY IN A DIRECT LINE, 140.48 FEET TO A POINT;"
+    calls, _, _, ignored = _parse_one(text)
+
+    assert calls == []
+    assert len(ignored) >= 1
+
+
+def test_mixed_ocr_sample_parses_only_safe_exact_bearings():
+    text = (
+        "THENCE SOUTH 34°39'40\" WEST ALONG. 'THE SOUTHEASTERLY LINE OF "
+        "SAID LOT; 113.31 FEET TO A POINT IN THE SOUTHERLY LINE OF SAID LOT;\n"
+        "THENCE NORTH 81°18'15\" WEST ALONG THE SOUTHERLY LINE OF SAID LOT "
+        "67.65 FEET TO A POINT IN THE WESTERLY LINE OF SAID LOT;\n"
+        "THENCE NORTH 1°02' EACH ALONG THE WESTERLY LINE OF SAID LOT, 2.96 FEET;\n"
+        "THENCE NORTHEASTERLY IN A DIRECT LINE, 140.48 FEET TO A POINT;\n"
+        "THENCE SOUTHEASTERLY ALONG THE NORTHEASTERLY LINE OF SAID LOT, "
+        "50 FEET TO THE POINT OF BEGINNING."
+    )
+    calls, _, _, _ = _parse_one(text)
+
+    parsed = [
+        (
+            c.bearing.value.quadrant_ns,
+            c.bearing.value.angle.deg,
+            c.bearing.value.angle.minutes,
+            int(c.bearing.value.angle.seconds),
+            c.bearing.value.quadrant_ew,
+            c.distance.value,
+        )
+        for c in calls
+    ]
+
+    assert parsed == [
+        ("S", 34, 39, 40, "W", 113.31),
+        ("N", 81, 18, 15, "W", 67.65),
+    ]

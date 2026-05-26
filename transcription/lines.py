@@ -46,6 +46,15 @@ LINE_CLEAN_RE = re.compile(
     re.IGNORECASE | re.VERBOSE,
 )
 
+# Standalone bearing detector: matches a complete quadrant bearing anywhere
+# in the text. Used to decide whether a clause already carries its own
+# bearing (so the OCR-fragment rejoin pass does not merge two real calls).
+BEARING_RE = re.compile(_BEARING, re.IGNORECASE | re.VERBOSE)
+
+
+def has_bearing(text: str) -> bool:
+    return BEARING_RE.search(text) is not None
+
 LINE_NARRATIVE_RE = re.compile(
     _BEARING + r"""
     \s+[A-Za-z][^,]{0,160}?,?\s+

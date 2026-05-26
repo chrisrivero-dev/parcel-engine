@@ -7,7 +7,7 @@ from typing import List, Optional, Tuple
 from domain.source import SourceSpan
 from models.schema import LineCall
 
-from transcription.lines import parse_line_chunk
+from transcription.lines import has_bearing, parse_line_chunk
 
 KIND_BOUNDARY = "BOUNDARY"
 KIND_COMMENCEMENT = "COMMENCEMENT"
@@ -59,12 +59,53 @@ def _split_clauses_with_spans(text: str) -> List[Tuple[str, int, int]]:
     return results
 
 
+def _rejoin_ocr_fragments(
+    clauses: List[Tuple[str, int, int]]
+) -> List[Tuple[str, int, int]]:
+    """Rejoin a THENCE call that OCR split across a stray semicolon.
+
+    When a clause carries a valid bearing but does not parse (because the
+    distance was pushed into the following fragment), and the next fragment
+    is a pure continuation -- no THENCE, no bearing of its own, but does
+    contain a distance -- the two are merged with a space so the line
+    parser can recover the full bearing+distance call. The merge is only
+    accepted if the joined text actually parses, so context-only fragments
+    are left untouched. Joining is bounded to a single following fragment.
+    """
+    merged: List[Tuple[str, int, int]] = []
+    i = 0
+    n = len(clauses)
+    while i < n:
+        text, start, end = clauses[i]
+        if (
+            i + 1 < n
+            and has_bearing(text)
+            and parse_line_chunk(text, 0) is None
+        ):
+            next_text, _, next_end = clauses[i + 1]
+            if (
+                not _THENCE_RE.search(next_text)
+                and not has_bearing(next_text)
+                and _DISTANCE_FEET_RE.search(next_text)
+            ):
+                joined = f"{text} {next_text}"
+                if parse_line_chunk(joined, 0) is not None:
+                    merged.append((joined, start, next_end))
+                    i += 2
+                    continue
+        merged.append((text, start, end))
+        i += 1
+    return merged
+
+
 def classify(text: str) -> List[Chunk]:
     phase = _initial_phase(text)
     chunks: List[Chunk] = []
     idx = 1
 
-    for clause, span_start, span_end in _split_clauses_with_spans(text):
+    for clause, span_start, span_end in _rejoin_ocr_fragments(
+        _split_clauses_with_spans(text)
+    ):
         span = SourceSpan(start=span_start, end=span_end, text=clause)
         upper = clause.upper()
 
