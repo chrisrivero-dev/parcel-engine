@@ -24,7 +24,6 @@ from PySide6.QtWidgets import (
     QPushButton,
     QPlainTextEdit,
     QSplitter,
-    QTabWidget,
     QTableWidget,
     QTableWidgetItem,
     QToolBar,
@@ -252,14 +251,49 @@ class ParcelDesktopApp(QMainWindow):
         main = QWidget()
         self.setCentralWidget(main)
 
+        # Three-pane COGO Reader layout, all panes resizable via splitters:
+        #   Left   – read-only reference/deed image (with OCR line highlight)
+        #   Middle – editable legal source + OCR Draft + OCR Lines review
+        #   Right  – COGO grid, summary, ignored review, parcel preview, validation
         splitter = QSplitter(Qt.Horizontal)
+        splitter.addWidget(self._build_image_pane())
+        splitter.addWidget(self._build_review_pane())
+        splitter.addWidget(self._build_output_pane())
+        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(1, 4)
+        splitter.setStretchFactor(2, 5)
+        splitter.setSizes([360, 520, 620])
 
-        left = QWidget()
-        left_layout = QVBoxLayout(left)
+        layout = QHBoxLayout(main)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(splitter)
 
-        title = QLabel("Paste Legal Description")
+    # ── Left pane: reference image ─────────────────────────────────────
+    def _build_image_pane(self) -> QWidget:
+        pane = QWidget()
+        pane_layout = QVBoxLayout(pane)
+
+        title = QLabel("Reference / Deed Image")
+        title.setStyleSheet("font-size: 16px; font-weight: 600;")
+        pane_layout.addWidget(title)
+
+        load_image_btn = QPushButton("Load Reference Image")
+        load_image_btn.clicked.connect(self.load_reference_image)
+        pane_layout.addWidget(load_image_btn)
+
+        self.reference_image_viewer = ReferenceImageViewer()
+        pane_layout.addWidget(self.reference_image_viewer, stretch=1)
+
+        return pane
+
+    # ── Middle pane: OCR / legal source review ─────────────────────────
+    def _build_review_pane(self) -> QWidget:
+        pane = QWidget()
+        pane_layout = QVBoxLayout(pane)
+
+        title = QLabel("Legal Source Text")
         title.setStyleSheet("font-size: 18px; font-weight: 600;")
-        left_layout.addWidget(title)
+        pane_layout.addWidget(title)
 
         coords_form = QFormLayout()
         self.start_x_input = QLineEdit("0.0")
@@ -270,8 +304,18 @@ class ParcelDesktopApp(QMainWindow):
         coords_form.addRow("Start X:", self.start_x_input)
         coords_form.addRow("Start Y:", self.start_y_input)
         coords_form.addRow("Basis:", self.basis_combo)
-        left_layout.addLayout(coords_form)
+        pane_layout.addLayout(coords_form)
 
+        # Vertical splitter so the legal text / OCR draft / OCR lines
+        # sections can be resized independently.
+        review_splitter = QSplitter(Qt.Vertical)
+
+        legal_section = QWidget()
+        legal_layout = QVBoxLayout(legal_section)
+        legal_layout.setContentsMargins(0, 0, 0, 0)
+        legal_label = QLabel("Legal Description (parsed on Parse Courses)")
+        legal_label.setStyleSheet("font-size: 13px; font-weight: 600; color: #6b7280;")
+        legal_layout.addWidget(legal_label)
         self.legal_input = QPlainTextEdit()
         self.legal_input.setPlaceholderText(
             'Example:\n'
@@ -280,18 +324,23 @@ class ParcelDesktopApp(QMainWindow):
             'N 90°00\'00" W 100\n'
             'S 00°00\'00" W 100'
         )
-        left_layout.addWidget(self.legal_input, stretch=3)
+        legal_layout.addWidget(self.legal_input, stretch=1)
+        review_splitter.addWidget(legal_section)
 
-        ocr_draft_label = QLabel("OCR Draft (review and edit before accepting)")
+        ocr_section = QWidget()
+        ocr_layout = QVBoxLayout(ocr_section)
+        ocr_layout.setContentsMargins(0, 0, 0, 0)
+        ocr_draft_label = QLabel("OCR Draft (review, delete irrelevant text, then accept)")
         ocr_draft_label.setStyleSheet("font-size: 13px; font-weight: 600; color: #6b7280;")
-        left_layout.addWidget(ocr_draft_label)
+        ocr_layout.addWidget(ocr_draft_label)
 
         self.ocr_draft_input = QPlainTextEdit()
         self.ocr_draft_input.setPlaceholderText(
             "Run OCR to Draft after loading a reference image. "
-            "Correct the text here, then click Accept OCR Text."
+            "Delete headers, exhibit labels, and other irrelevant text here, "
+            "then click Accept OCR Text."
         )
-        left_layout.addWidget(self.ocr_draft_input, stretch=2)
+        ocr_layout.addWidget(self.ocr_draft_input, stretch=1)
 
         ocr_draft_buttons = QHBoxLayout()
         run_ocr_draft_btn = QPushButton("Run OCR to Draft")
@@ -302,21 +351,29 @@ class ParcelDesktopApp(QMainWindow):
         accept_ocr_btn.clicked.connect(self.accept_ocr_draft)
         ocr_draft_buttons.addWidget(accept_ocr_btn)
         ocr_draft_buttons.addStretch(1)
-        left_layout.addLayout(ocr_draft_buttons)
+        ocr_layout.addLayout(ocr_draft_buttons)
+        review_splitter.addWidget(ocr_section)
 
+        lines_section = QWidget()
+        lines_layout = QVBoxLayout(lines_section)
+        lines_layout.setContentsMargins(0, 0, 0, 0)
         self.ocr_lines_label = QLabel("OCR Lines (select to locate on image)")
         self.ocr_lines_label.setStyleSheet(
             "font-size: 13px; font-weight: 600; color: #6b7280;"
         )
         self.ocr_lines_label.setVisible(False)
-        left_layout.addWidget(self.ocr_lines_label)
+        lines_layout.addWidget(self.ocr_lines_label)
 
         self.ocr_lines_list = QListWidget()
         self.ocr_lines_list.setVisible(False)
         self.ocr_lines_list.setMinimumHeight(100)
         self.ocr_lines_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.ocr_lines_list.itemSelectionChanged.connect(self._on_ocr_line_selected)
-        left_layout.addWidget(self.ocr_lines_list, stretch=2)
+        lines_layout.addWidget(self.ocr_lines_list, stretch=1)
+        review_splitter.addWidget(lines_section)
+
+        review_splitter.setSizes([300, 220, 160])
+        pane_layout.addWidget(review_splitter, stretch=1)
 
         button_row = QHBoxLayout()
 
@@ -340,11 +397,25 @@ class ParcelDesktopApp(QMainWindow):
         export_btn.clicked.connect(self.export_dxf_file)
         button_row.addWidget(export_btn)
 
-        left_layout.addLayout(button_row)
+        pane_layout.addLayout(button_row)
+
+        return pane
+
+    # ── Right pane: COGO grid / preview / validation ───────────────────
+    def _build_output_pane(self) -> QWidget:
+        pane = QWidget()
+        pane_layout = QVBoxLayout(pane)
+
+        output_splitter = QSplitter(Qt.Vertical)
+
+        # Top: COGO grid + manual editing + summary + ignored review.
+        grid_section = QWidget()
+        grid_layout = QVBoxLayout(grid_section)
+        grid_layout.setContentsMargins(0, 0, 0, 0)
 
         table_label = QLabel("Extracted COGO Courses")
         table_label.setStyleSheet("font-size: 16px; font-weight: 600;")
-        left_layout.addWidget(table_label)
+        grid_layout.addWidget(table_label)
 
         self.course_table = QTableWidget(0, 6)
         self.course_table.setHorizontalHeaderLabels(
@@ -353,7 +424,7 @@ class ParcelDesktopApp(QMainWindow):
         self.course_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.course_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.course_table.itemSelectionChanged.connect(self._on_course_row_selected)
-        left_layout.addWidget(self.course_table, stretch=3)
+        grid_layout.addWidget(self.course_table, stretch=3)
 
         row_button_row = QHBoxLayout()
         add_row_btn = QPushButton("Add Row")
@@ -363,7 +434,7 @@ class ParcelDesktopApp(QMainWindow):
         del_row_btn = QPushButton("Delete Selected Row")
         del_row_btn.clicked.connect(self.delete_selected_row)
         row_button_row.addWidget(del_row_btn)
-        left_layout.addLayout(row_button_row)
+        grid_layout.addLayout(row_button_row)
 
         move_row_row = QHBoxLayout()
         up_btn = QPushButton("Move Row Up")
@@ -377,11 +448,11 @@ class ParcelDesktopApp(QMainWindow):
         clear_btn = QPushButton("Clear Rows")
         clear_btn.clicked.connect(self.clear_rows)
         move_row_row.addWidget(clear_btn)
-        left_layout.addLayout(move_row_row)
+        grid_layout.addLayout(move_row_row)
 
         summary_label = QLabel("Parse Summary")
         summary_label.setStyleSheet("font-size: 16px; font-weight: 600;")
-        left_layout.addWidget(summary_label)
+        grid_layout.addWidget(summary_label)
 
         summary_panel = QWidget()
         summary_layout = QFormLayout(summary_panel)
@@ -393,18 +464,19 @@ class ParcelDesktopApp(QMainWindow):
         summary_layout.addRow("Connection / Reference Ties:", self.summary_ties_count)
         summary_layout.addRow("Parse Errors:", self.summary_errors_count)
         summary_layout.addRow("Closure Misclose:", self.summary_closure)
-        left_layout.addWidget(summary_panel)
+        grid_layout.addWidget(summary_panel)
 
         ignored_label = QLabel("Ignored / Unparsed Text")
         ignored_label.setStyleSheet("font-size: 16px; font-weight: 600;")
-        left_layout.addWidget(ignored_label)
+        grid_layout.addWidget(ignored_label)
 
         ignored_note = QLabel(
-            "Review skipped text. Correct OCR/source text above, then click Parse Courses again."
+            "Review skipped text. Correct OCR/source text in the middle pane, "
+            "then click Parse Courses again."
         )
         ignored_note.setStyleSheet("font-size: 11px; color: #6b7280;")
         ignored_note.setWordWrap(True)
-        left_layout.addWidget(ignored_note)
+        grid_layout.addWidget(ignored_note)
 
         self.ignored_table = QTableWidget(0, 2)
         self.ignored_table.setHorizontalHeaderLabels(["Type", "Text"])
@@ -414,23 +486,25 @@ class ParcelDesktopApp(QMainWindow):
         self.ignored_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.ignored_table.setWordWrap(True)
         self.ignored_table.itemSelectionChanged.connect(self._on_ignored_row_selected)
-        left_layout.addWidget(self.ignored_table, stretch=1)
+        grid_layout.addWidget(self.ignored_table, stretch=1)
 
-        right = QWidget()
-        right_layout = QVBoxLayout(right)
+        output_splitter.addWidget(grid_section)
 
-        self.preview_tabs = QTabWidget()
-        right_layout.addWidget(self.preview_tabs, stretch=4)
+        # Bottom: parcel preview + validation.
+        preview_section = QWidget()
+        preview_layout = QVBoxLayout(preview_section)
+        preview_layout.setContentsMargins(0, 0, 0, 0)
+
+        preview_label = QLabel("Parcel Preview")
+        preview_label.setStyleSheet("font-size: 16px; font-weight: 600;")
+        preview_layout.addWidget(preview_label)
 
         self.canvas = ParcelCanvas()
-        self.preview_tabs.addTab(self.canvas, "Parcel Preview")
-
-        self.reference_image_viewer = ReferenceImageViewer()
-        self.preview_tabs.addTab(self.reference_image_viewer, "Reference Image")
+        preview_layout.addWidget(self.canvas, stretch=4)
 
         validation_label = QLabel("Validation")
         validation_label.setStyleSheet("font-size: 16px; font-weight: 600;")
-        right_layout.addWidget(validation_label)
+        preview_layout.addWidget(validation_label)
 
         self.validation_panel = QWidget()
         validation_layout = QFormLayout(self.validation_panel)
@@ -443,14 +517,14 @@ class ParcelDesktopApp(QMainWindow):
         validation_layout.addRow("Intersections:", self.intersections_value)
         validation_layout.addRow("Curve Error Groups:", self.curve_errors_value)
 
-        right_layout.addWidget(self.validation_panel)
+        preview_layout.addWidget(self.validation_panel)
 
-        splitter.addWidget(left)
-        splitter.addWidget(right)
-        splitter.setSizes([760, 740])
+        output_splitter.addWidget(preview_section)
+        output_splitter.setSizes([460, 440])
 
-        layout = QHBoxLayout(main)
-        layout.addWidget(splitter)
+        pane_layout.addWidget(output_splitter)
+
+        return pane
 
     def _get_start_point(self) -> Point:
         try:
@@ -818,8 +892,6 @@ class ParcelDesktopApp(QMainWindow):
                 f"Could not read image:\n{file_path}",
             )
             return
-
-        self.preview_tabs.setCurrentWidget(self.reference_image_viewer)
 
     def run_ocr_to_draft(self) -> None:
         image_path = self.reference_image_viewer.current_path
