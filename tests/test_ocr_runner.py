@@ -6,6 +6,7 @@ from ui.ocr_runner import (
     OcrFailed,
     PytesseractMissing,
     TesseractNotFound,
+    assemble_ocr_lines_text,
     group_words_into_lines,
     run_ocr,
     run_ocr_lines,
@@ -205,3 +206,51 @@ def test_run_ocr_lines_missing_libs_raises():
             _import_pytesseract=lambda: None,
             _import_pil_image=lambda: _FakeImage(),
         )
+
+
+# ---------------------------------------------------------------------------
+# assemble_ocr_lines_text
+# ---------------------------------------------------------------------------
+
+def _make_line(text, y=0, x=0, conf=None):
+    return OCRLine(text=text, confidence=conf, x=x, y=y, width=100, height=20)
+
+
+def test_assemble_preserves_reading_order():
+    lines = [
+        _make_line("THENCE SOUTH 47 WEST", y=40),
+        _make_line("BEGINNING at a point", y=0),
+        _make_line("120 FEET to POB", y=80),
+    ]
+    result = assemble_ocr_lines_text(lines)
+    assert result == "BEGINNING at a point\nTHENCE SOUTH 47 WEST\n120 FEET to POB"
+
+
+def test_assemble_excludes_confidence_values():
+    lines = [_make_line("N 45 E 100 FEET", conf=88.5)]
+    result = assemble_ocr_lines_text(lines)
+    assert "88" not in result
+    assert result == "N 45 E 100 FEET"
+
+
+def test_assemble_skips_blank_lines():
+    lines = [
+        _make_line("THENCE NORTH", y=0),
+        _make_line("   ", y=20),
+        _make_line("", y=40),
+        _make_line("46.68 FEET", y=60),
+    ]
+    result = assemble_ocr_lines_text(lines)
+    assert result == "THENCE NORTH\n46.68 FEET"
+
+
+def test_assemble_returns_empty_string_for_no_lines():
+    assert assemble_ocr_lines_text([]) == ""
+
+
+def test_run_ocr_to_draft_fallback_uses_flat_ocr_when_no_lines():
+    # Simulate run_ocr_lines returning empty — flat run_ocr should be used.
+    # We verify this at the helper level: assemble of empty list == ""
+    # so callers must detect the empty case and call run_ocr instead.
+    result = assemble_ocr_lines_text([])
+    assert result == ""

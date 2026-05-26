@@ -201,6 +201,17 @@ def run_ocr_lines(
     return group_words_into_lines(data)
 
 
+def assemble_ocr_lines_text(lines: List[OCRLine]) -> str:
+    """Assemble OCRLine objects into plain editable text for the OCR Draft box.
+
+    Sorts by reading order (top-to-bottom, then left-to-right), skips
+    blank lines, and joins with newlines. Confidence values are excluded
+    so the result is clean legal description text ready for editing.
+    """
+    sorted_lines = sorted(lines, key=lambda ln: (ln.y, ln.x))
+    return "\n".join(ln.text for ln in sorted_lines if ln.text.strip())
+
+
 def _load(injected: Optional[Callable], module_name: str):
     if injected is not None:
         return injected()

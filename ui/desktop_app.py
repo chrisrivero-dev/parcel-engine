@@ -52,6 +52,7 @@ from ui.ocr_runner import (
     OcrFailed,
     PytesseractMissing,
     TesseractNotFound,
+    assemble_ocr_lines_text,
     run_ocr,
     run_ocr_lines,
 )
@@ -312,8 +313,10 @@ class ParcelDesktopApp(QMainWindow):
 
         self.ocr_lines_list = QListWidget()
         self.ocr_lines_list.setVisible(False)
+        self.ocr_lines_list.setMinimumHeight(100)
+        self.ocr_lines_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.ocr_lines_list.itemSelectionChanged.connect(self._on_ocr_line_selected)
-        left_layout.addWidget(self.ocr_lines_list, stretch=1)
+        left_layout.addWidget(self.ocr_lines_list, stretch=2)
 
         button_row = QHBoxLayout()
 
@@ -829,7 +832,7 @@ class ParcelDesktopApp(QMainWindow):
             return
 
         try:
-            text = run_ocr(image_path)
+            lines = run_ocr_lines(image_path)
         except PytesseractMissing as exc:
             QMessageBox.information(self, "OCR Not Installed", str(exc))
             return
@@ -840,20 +843,24 @@ class ParcelDesktopApp(QMainWindow):
             QMessageBox.critical(self, "OCR Failed", str(exc))
             return
 
-        self.ocr_draft_input.setPlainText(text)
-        self._populate_ocr_lines(image_path)
+        if lines:
+            draft_text = assemble_ocr_lines_text(lines)
+        else:
+            # No structured lines returned — fall back to flat OCR text.
+            try:
+                draft_text = run_ocr(image_path)
+            except OcrFailed as exc:
+                QMessageBox.critical(self, "OCR Failed", str(exc))
+                return
 
-    def _populate_ocr_lines(self, image_path: str) -> None:
-        self._ocr_lines = []
+        self.ocr_draft_input.setPlainText(draft_text)
+        self._populate_ocr_lines(lines)
+
+    def _populate_ocr_lines(self, lines: list) -> None:
+        self._ocr_lines = lines
         self.ocr_lines_list.clear()
         self.reference_image_viewer.clear_highlight()
 
-        try:
-            lines = run_ocr_lines(image_path)
-        except OcrError:
-            lines = []
-
-        self._ocr_lines = lines
         for line in lines:
             if line.confidence is not None:
                 label = f"[{line.confidence:.0f}%] {line.text}"
