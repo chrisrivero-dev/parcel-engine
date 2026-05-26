@@ -316,3 +316,89 @@ def test_ambiguous_concavity_still_skips():
     assert result["curves"] == []
     assert result["points"][-1] == pytest.approx((0.0, 100.0), abs=1e-6)
 
+# ============================================================
+# QA metadata
+# ============================================================
+
+def test_curve_metadata_explicit_handedness():
+    calls = [
+        _north_100(),
+        CurveCall(
+            id="C1",
+            raw_text="curve right R50 delta 90",
+            params=CurveParams(
+                curve_type=CurveType.TANGENT,
+                radius=50.0,
+                handedness=Handedness.RIGHT,
+                delta=DMS(deg=90, minutes=0, seconds=0),
+            ),
+        ),
+    ]
+
+    result = build_geometry(start_point=(0.0, 0.0), calls=calls)
+
+    assert len(result["curves"]) == 1
+    meta = result["curves"][0]
+
+    assert meta["handedness_source"] == "explicit"
+    assert meta["call_id"] == "C1"
+    assert meta["raw_text"] == "curve right R50 delta 90"
+    assert meta["radius"] == pytest.approx(50.0)
+    assert meta["delta_deg"] == pytest.approx(90.0)
+    assert meta["handedness"] == "right"
+    assert meta["start_point"] == pytest.approx((0.0, 100.0), abs=1e-6)
+    assert meta["end_point"] == pytest.approx((50.0, 150.0), abs=1e-6)
+    assert "arc_length" in meta
+    assert "along_feature" in meta
+
+
+def test_curve_metadata_concavity_resolved():
+    arc = 50.0 * (math.pi / 2.0)
+    calls = [
+        _north_100(),
+        CurveCall(
+            id="C2",
+            raw_text="concave easterly curve",
+            along_feature="CONCAVE EASTERLY",
+            params=CurveParams(
+                curve_type=CurveType.NON_TANGENT,
+                radius=50.0,
+                handedness=None,
+                arc_length=arc,
+            ),
+        ),
+    ]
+
+    result = build_geometry(start_point=(0.0, 0.0), calls=calls)
+
+    assert len(result["curves"]) == 1
+    meta = result["curves"][0]
+
+    assert meta["handedness_source"] == "resolved_from_concavity"
+    assert meta["along_feature"] == "CONCAVE EASTERLY"
+    assert meta["arc_length"] == pytest.approx(arc)
+    assert meta["call_id"] == "C2"
+    assert meta["handedness"] == "right"
+
+
+def test_skipped_curve_not_in_curves_list():
+    arc = 50.0 * (math.pi / 2.0)
+    calls = [
+        _north_100(),
+        CurveCall(
+            id="C1",
+            raw_text="concave north curve",
+            along_feature="CONCAVE NORTH",
+            params=CurveParams(
+                curve_type=CurveType.NON_TANGENT,
+                radius=50.0,
+                handedness=None,
+                arc_length=arc,
+            ),
+        ),
+    ]
+
+    result = build_geometry(start_point=(0.0, 0.0), calls=calls)
+
+    assert result["curves"] == []
+

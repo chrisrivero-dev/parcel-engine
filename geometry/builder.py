@@ -153,10 +153,14 @@ def build_geometry(*, start_point=(0.0, 0.0), calls):
                 continue
 
             incoming_az_deg = math.degrees(current_azimuth_rad)
+            start_pt = (current_x, current_y)
 
-            handedness = params.handedness
-            if handedness is None:
+            if params.handedness is not None:
+                handedness = params.handedness
+                handedness_source = "explicit"
+            else:
                 handedness = _resolve_handedness(call.along_feature, incoming_az_deg)
+                handedness_source = "resolved_from_concavity" if handedness is not None else None
             if handedness is None:
                 continue
 
@@ -189,9 +193,15 @@ def build_geometry(*, start_point=(0.0, 0.0), calls):
             ) % (2 * math.pi)
 
             curves.append({
+                "call_id": call.id,
+                "raw_text": call.raw_text,
                 "radius": params.radius,
                 "delta_deg": delta_deg,
+                "arc_length": params.arc_length,
                 "handedness": handedness.value,
+                "handedness_source": handedness_source,
+                "along_feature": call.along_feature,
+                "start_point": start_pt,
                 "end_point": end_pt,
             })
 
