@@ -2,7 +2,7 @@ import math
 
 import pytest
 
-from geometry.builder import build_geometry
+from geometry.builder import build_geometry, _resolve_handedness
 from models.schema import (
     LineCall,
     CurveCall,
@@ -201,6 +201,112 @@ def test_curve_without_handedness_is_skipped():
                 radius=50.0,
                 handedness=None,
                 arc_length=78.54,
+            ),
+        ),
+    ]
+
+    result = build_geometry(start_point=(0.0, 0.0), calls=calls)
+
+    assert result["curves"] == []
+    assert result["points"][-1] == pytest.approx((0.0, 100.0), abs=1e-6)
+
+# ============================================================
+# Concavity-to-handedness resolution
+# ============================================================
+
+@pytest.mark.parametrize("concavity,incoming_az,expected", [
+    ("CONCAVE EAST", 0.0, Handedness.RIGHT),
+    ("CONCAVE WEST", 0.0, Handedness.LEFT),
+    ("CONCAVE SOUTH", 90.0, Handedness.RIGHT),
+    ("CONCAVE NORTH", 90.0, Handedness.LEFT),
+    ("CONCAVE WEST", 180.0, Handedness.RIGHT),
+    ("CONCAVE EAST", 180.0, Handedness.LEFT),
+    ("CONCAVE NORTH", 270.0, Handedness.RIGHT),
+    ("CONCAVE SOUTH", 270.0, Handedness.LEFT),
+    ("CONCAVE EASTERLY", 0.0, Handedness.RIGHT),
+    ("CONCAVE WESTERLY", 0.0, Handedness.LEFT),
+    ("CONCAVE NORTHEASTERLY", 270.0, Handedness.RIGHT),
+    ("CONCAVE SOUTHWESTERLY", 90.0, Handedness.RIGHT),
+])
+def test_resolve_handedness_deterministic(concavity, incoming_az, expected):
+    assert _resolve_handedness(concavity, incoming_az) == expected
+
+
+@pytest.mark.parametrize("concavity,incoming_az", [
+    ("CONCAVE NORTH", 0.0),
+    ("CONCAVE SOUTH", 0.0),
+    ("CONCAVE EAST", 90.0),
+    ("CONCAVE WEST", 270.0),
+    (None, 0.0),
+    ("", 0.0),
+    ("ALONG SOMETHING", 0.0),
+    ("CONCAVE DIAGONAL", 0.0),
+])
+def test_resolve_handedness_ambiguous_returns_none(concavity, incoming_az):
+    assert _resolve_handedness(concavity, incoming_az) is None
+
+
+def test_concavity_curve_resolves_and_renders():
+    arc = 50.0 * (math.pi / 2.0)
+    calls = [
+        _north_100(),
+        CurveCall(
+            id="C1",
+            raw_text="concave easterly curve",
+            along_feature="CONCAVE EASTERLY",
+            params=CurveParams(
+                curve_type=CurveType.NON_TANGENT,
+                radius=50.0,
+                handedness=None,
+                arc_length=arc,
+            ),
+        ),
+    ]
+
+    result = build_geometry(start_point=(0.0, 0.0), calls=calls)
+
+    assert len(result["curves"]) == 1
+    assert result["curves"][0]["handedness"] == "right"
+    assert result["points"][-1] == pytest.approx((50.0, 150.0), abs=1e-6)
+
+
+def test_concavity_curve_west_resolves_left():
+    arc = 50.0 * (math.pi / 2.0)
+    calls = [
+        _north_100(),
+        CurveCall(
+            id="C1",
+            raw_text="concave westerly curve",
+            along_feature="CONCAVE WESTERLY",
+            params=CurveParams(
+                curve_type=CurveType.NON_TANGENT,
+                radius=50.0,
+                handedness=None,
+                arc_length=arc,
+            ),
+        ),
+    ]
+
+    result = build_geometry(start_point=(0.0, 0.0), calls=calls)
+
+    assert len(result["curves"]) == 1
+    assert result["curves"][0]["handedness"] == "left"
+    assert result["points"][-1] == pytest.approx((-50.0, 150.0), abs=1e-6)
+
+
+def test_ambiguous_concavity_still_skips():
+    arc = 50.0 * (math.pi / 2.0)
+    calls = [
+        _north_100(),
+        CurveCall(
+            id="C1",
+            raw_text="concave north curve",
+            along_feature="CONCAVE NORTH",
+            params=CurveParams(
+                curve_type=CurveType.NON_TANGENT,
+                radius=50.0,
+                handedness=None,
+                arc_length=arc,
             ),
         ),
     ]
