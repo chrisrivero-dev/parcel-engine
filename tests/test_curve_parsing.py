@@ -1,6 +1,8 @@
 from geometry.builder import build_geometry
 from models.schema import CurveCall, CurveType, Handedness
 from transcription.curves import parse_curve_chunk
+import pytest
+
 from transcription.parser_v2 import parse_legal_description
 
 
@@ -89,3 +91,106 @@ def test_curve_with_deterministic_concavity_renders_without_explicit_handedness(
     assert calls[1].params.handedness is None
     assert len(result["curves"]) == 1
     assert result["curves"][0]["handedness"] == "right"
+
+# ============================================================
+# Realistic legal-description sample cases (parse → build)
+# ============================================================
+
+_QUARTER_ARC_R50 = 78.5398  # 50 * pi/2, a 90-degree arc on a 50 ft radius
+
+
+def _parse_and_build(text: str):
+    calls, _, _, _ = parse_legal_description(text)
+    result = build_geometry(start_point=(0.0, 0.0), calls=calls)
+    return calls, result
+
+
+def test_sample_north_then_concave_east_renders_right():
+    text = (
+        "THENCE NORTH 0°00'00\" EAST 100.00 FEET; "
+        "THENCE ALONG A CURVE CONCAVE EASTERLY, HAVING A RADIUS OF 50.00 FEET, "
+        f"AN ARC DISTANCE OF {_QUARTER_ARC_R50} FEET;"
+    )
+    _, result = _parse_and_build(text)
+
+    assert len(result["curves"]) == 1
+    assert result["curves"][0]["handedness"] == "right"
+    assert result["points"][-1] == pytest.approx((50.0, 150.0), abs=1e-3)
+
+
+def test_sample_north_then_concave_west_renders_left():
+    text = (
+        "THENCE NORTH 0°00'00\" EAST 100.00 FEET; "
+        "THENCE ALONG A CURVE CONCAVE WESTERLY, HAVING A RADIUS OF 50.00 FEET, "
+        f"AN ARC DISTANCE OF {_QUARTER_ARC_R50} FEET;"
+    )
+    _, result = _parse_and_build(text)
+
+    assert len(result["curves"]) == 1
+    assert result["curves"][0]["handedness"] == "left"
+    assert result["points"][-1] == pytest.approx((-50.0, 150.0), abs=1e-3)
+
+
+def test_sample_east_then_concave_south_with_delta_renders_right():
+    text = (
+        "THENCE NORTH 90°00'00\" EAST 100.00 FEET; "
+        "THENCE ALONG A CURVE CONCAVE SOUTHERLY, HAVING A RADIUS OF 50.00 FEET, "
+        "THROUGH A CENTRAL ANGLE OF 90°00';"
+    )
+    _, result = _parse_and_build(text)
+
+    assert len(result["curves"]) == 1
+    assert result["curves"][0]["handedness"] == "right"
+    assert result["points"][-1] == pytest.approx((150.0, -50.0), abs=1e-3)
+
+
+def test_sample_east_then_concave_north_with_delta_renders_left():
+    text = (
+        "THENCE NORTH 90°00'00\" EAST 100.00 FEET; "
+        "THENCE ALONG A CURVE CONCAVE NORTHERLY, HAVING A RADIUS OF 50.00 FEET, "
+        "THROUGH A CENTRAL ANGLE OF 90°00';"
+    )
+    _, result = _parse_and_build(text)
+
+    assert len(result["curves"]) == 1
+    assert result["curves"][0]["handedness"] == "left"
+    assert result["points"][-1] == pytest.approx((150.0, 50.0), abs=1e-3)
+
+
+def test_sample_collinear_concavity_is_parsed_but_skipped():
+    text = (
+        "THENCE NORTH 0°00'00\" EAST 100.00 FEET; "
+        "THENCE ALONG A CURVE CONCAVE NORTHERLY, HAVING A RADIUS OF 50.00 FEET, "
+        f"AN ARC DISTANCE OF {_QUARTER_ARC_R50} FEET;"
+    )
+    calls, result = _parse_and_build(text)
+
+    assert any(isinstance(call, CurveCall) for call in calls)
+    assert result["curves"] == []
+    assert result["points"][-1] == pytest.approx((0.0, 100.0), abs=1e-6)
+
+
+def test_sample_curve_missing_radius_is_not_curvecall_and_skips():
+    text = (
+        "THENCE NORTH 0°00'00\" EAST 100.00 FEET; "
+        "THENCE ALONG A CURVE CONCAVE EASTERLY, "
+        f"AN ARC DISTANCE OF {_QUARTER_ARC_R50} FEET;"
+    )
+    calls, result = _parse_and_build(text)
+
+    assert not any(isinstance(call, CurveCall) for call in calls)
+    assert result["curves"] == []
+    assert result["points"][-1] == pytest.approx((0.0, 100.0), abs=1e-6)
+
+
+def test_sample_curve_missing_arc_and_delta_is_not_curvecall_and_skips():
+    text = (
+        "THENCE NORTH 0°00'00\" EAST 100.00 FEET; "
+        "THENCE ALONG A CURVE CONCAVE EASTERLY, HAVING A RADIUS OF 50.00 FEET;"
+    )
+    calls, result = _parse_and_build(text)
+
+    assert not any(isinstance(call, CurveCall) for call in calls)
+    assert result["curves"] == []
+    assert result["points"][-1] == pytest.approx((0.0, 100.0), abs=1e-6)
+
