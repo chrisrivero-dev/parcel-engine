@@ -92,6 +92,10 @@ def build_geometry(*, start_point=(0.0, 0.0), calls):
         # =============================
         elif isinstance(call, CurveCall):
             params = call.params
+
+            if params.radius is None or params.handedness is None:
+                continue
+
             radius = params.radius
 
             # --- delta ---

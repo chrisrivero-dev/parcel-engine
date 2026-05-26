@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Tuple
 
-from models.schema import LineCall
+from models.schema import CurveCall, LineCall
 
 from transcription.classify import (
     KIND_BOUNDARY,
@@ -35,36 +35,43 @@ _REFERENCE_KEYWORDS = (
 
 def parse_legal_description(
     text: str,
-) -> Tuple[List[LineCall], List[Dict], List[str], List[Dict]]:
+) -> Tuple[List[LineCall | CurveCall], List[Dict], List[str], List[Dict]]:
     """
     Parse a metes-and-bounds legal description into:
-      - calls:           boundary LineCall list (ready for build_geometry)
+      - calls:           boundary LineCall/CurveCall list (ready for build_geometry)
       - ties:            commencement legs and reference ties
       - errors:          unparsed clauses that couldn't be classified
       - ignored_chunks:  NOTE chunks shown in the OCR review panel
                          each dict has {"type": str, "text": str, "source_span": SourceSpan}
 
     Each boundary call carries a source_span attribute (indexes into normalized text).
-    Curves, OCR images, and closure synthesis are out of scope.
+    OCR images and closure synthesis are out of scope.
     """
     normalized = normalize(text)
     chunks = classify(normalized)
 
-    calls: List[LineCall] = []
+    calls: List[LineCall | CurveCall] = []
     ties: List[Dict] = []
     errors: List[str] = []
     ignored_chunks: List[Dict] = []
 
     tie_idx = 1
     line_idx = 1
+    curve_idx = 1
 
     for chunk in chunks:
         if chunk.kind == KIND_BOUNDARY:
             assert chunk.parsed_line is not None
-            chunk.parsed_line.id = f"L{line_idx}"
+
+            if isinstance(chunk.parsed_line, CurveCall):
+                chunk.parsed_line.id = f"C{curve_idx}"
+                curve_idx += 1
+            else:
+                chunk.parsed_line.id = f"L{line_idx}"
+                line_idx += 1
+
             chunk.parsed_line.source_span = chunk.source_span
             calls.append(chunk.parsed_line)
-            line_idx += 1
         elif chunk.kind == KIND_COMMENCEMENT:
             if chunk.parsed_line is not None:
                 chunk.parsed_line.id = f"RT{tie_idx}"

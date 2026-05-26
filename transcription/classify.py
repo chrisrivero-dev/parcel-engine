@@ -5,8 +5,9 @@ from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 
 from domain.source import SourceSpan
-from models.schema import LineCall
+from models.schema import CurveCall, LineCall
 
+from transcription.curves import parse_curve_chunk
 from transcription.lines import has_bearing, parse_line_chunk
 
 KIND_BOUNDARY = "BOUNDARY"
@@ -19,7 +20,7 @@ KIND_NOTE = "NOTE"
 class Chunk:
     raw: str
     kind: str
-    parsed_line: Optional[LineCall]
+    parsed_line: Optional[LineCall | CurveCall]
     source_span: Optional[SourceSpan] = field(default=None)
 
 
@@ -127,6 +128,8 @@ def classify(text: str) -> List[Chunk]:
             continue
 
         parsed = parse_line_chunk(clause, idx)
+        if parsed is None:
+            parsed = parse_curve_chunk(clause, idx)
 
         if parsed is None:
             chunks.append(Chunk(raw=clause, kind=KIND_NOTE, parsed_line=None, source_span=span))
