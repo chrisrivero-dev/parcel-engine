@@ -74,7 +74,7 @@ def test_mixed_line_and_curve_description_parses_both():
     assert calls[1].params.handedness == Handedness.LEFT
 
 
-def test_curve_without_handedness_is_not_rendered_as_fake_geometry():
+def test_curve_with_deterministic_concavity_renders_without_explicit_handedness():
     text = (
         "THENCE NORTH 00°00'00\" EAST 100.00 FEET; "
         "THENCE ALONG A CURVE CONCAVE EASTERLY, HAVING A RADIUS OF "
@@ -87,4 +87,5 @@ def test_curve_without_handedness_is_not_rendered_as_fake_geometry():
     assert len(calls) == 2
     assert isinstance(calls[1], CurveCall)
     assert calls[1].params.handedness is None
-    assert result["curves"] == []
+    assert len(result["curves"]) == 1
+    assert result["curves"][0]["handedness"] == "right"

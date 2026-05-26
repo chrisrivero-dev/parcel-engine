@@ -1,7 +1,60 @@
 import math
+from typing import Optional
 
 from geometry.curves import compute_tangent_curve
 from models.schema import LineCall, CurveCall, Handedness, CurveType
+
+
+# Survey azimuths in degrees, where 0 = North and angles increase clockwise.
+_CONCAVITY_AZ = {
+    "NORTH": 0.0,
+    "NORTHERLY": 0.0,
+    "NORTHEAST": 45.0,
+    "NORTHEASTERLY": 45.0,
+    "EAST": 90.0,
+    "EASTERLY": 90.0,
+    "SOUTHEAST": 135.0,
+    "SOUTHEASTERLY": 135.0,
+    "SOUTH": 180.0,
+    "SOUTHERLY": 180.0,
+    "SOUTHWEST": 225.0,
+    "SOUTHWESTERLY": 225.0,
+    "WEST": 270.0,
+    "WESTERLY": 270.0,
+    "NORTHWEST": 315.0,
+    "NORTHWESTERLY": 315.0,
+}
+
+
+def _resolve_handedness(
+    along_feature: Optional[str],
+    incoming_az_deg: float,
+) -> Optional[Handedness]:
+    """
+    Resolve LEFT/RIGHT from a CONCAVE direction label and incoming traverse azimuth.
+
+    Returns None when the label is missing, not a recognized concavity direction,
+    or the concavity direction is collinear / anti-collinear with the incoming leg.
+    """
+    if not along_feature:
+        return None
+
+    upper = along_feature.upper().strip()
+    if not upper.startswith("CONCAVE "):
+        return None
+
+    direction = upper[len("CONCAVE "):].strip()
+    concavity_az = _CONCAVITY_AZ.get(direction)
+    if concavity_az is None:
+        return None
+
+    diff = (concavity_az - incoming_az_deg) % 360.0
+
+    if diff < 1e-9 or abs(diff - 180.0) < 1e-9 or abs(diff - 360.0) < 1e-9:
+        return None
+
+    return Handedness.RIGHT if diff < 180.0 else Handedness.LEFT
+
 
 def dms_to_degrees(dms):
     return (
@@ -94,14 +147,17 @@ def build_geometry(*, start_point=(0.0, 0.0), calls):
         elif isinstance(call, CurveCall):
             params = call.params
 
-            # Render only when the curve direction is explicit. Concavity alone
-            # cannot resolve left/right without the incoming traverse direction,
-            # so such curves are left unrendered (no fabricated geometry).
-            if params.handedness is None:
-                continue
             if params.radius is None:
                 continue
             if params.delta is None and params.arc_length is None:
+                continue
+
+            incoming_az_deg = math.degrees(current_azimuth_rad)
+
+            handedness = params.handedness
+            if handedness is None:
+                handedness = _resolve_handedness(call.along_feature, incoming_az_deg)
+            if handedness is None:
                 continue
 
             if params.delta is not None:
@@ -109,11 +165,9 @@ def build_geometry(*, start_point=(0.0, 0.0), calls):
             else:
                 delta_deg = (params.arc_length / params.radius) * (180.0 / math.pi)
 
-            incoming_az_deg = math.degrees(current_azimuth_rad)
-
-            # The traverse supplies the incoming tangent, so render as a tangent
-            # arc using the deterministic, tested curve solver.
-            tangent_params = params.model_copy(update={"curve_type": CurveType.TANGENT})
+            tangent_params = params.model_copy(
+                update={"curve_type": CurveType.TANGENT, "handedness": handedness}
+            )
             segments = max(12, int(abs(delta_deg)))
 
             try:
@@ -129,8 +183,7 @@ def build_geometry(*, start_point=(0.0, 0.0), calls):
             points.extend(arc_pts)
             current_x, current_y = end_pt
 
-            # RIGHT turns increase azimuth clockwise; LEFT turns decrease it.
-            sign_az = 1.0 if params.handedness == Handedness.RIGHT else -1.0
+            sign_az = 1.0 if handedness == Handedness.RIGHT else -1.0
             current_azimuth_rad = math.radians(
                 incoming_az_deg + sign_az * delta_deg
             ) % (2 * math.pi)
@@ -138,7 +191,7 @@ def build_geometry(*, start_point=(0.0, 0.0), calls):
             curves.append({
                 "radius": params.radius,
                 "delta_deg": delta_deg,
-                "handedness": params.handedness.value,
+                "handedness": handedness.value,
                 "end_point": end_pt,
             })
 
