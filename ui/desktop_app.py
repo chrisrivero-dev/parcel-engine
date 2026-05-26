@@ -409,20 +409,21 @@ class ParcelDesktopApp(QMainWindow):
         pane_layout = QVBoxLayout(pane)
         pane_layout.setContentsMargins(0, 0, 0, 0)
 
-        # Three vertical sections so each gets its own resizable slice:
-        #   top    – COGO grid + row/move buttons + summary
-        #   middle – Ignored / Unparsed review
-        #   bottom – Parcel Preview + Validation
+        # Four vertical sections so each gets its own resizable slice:
+        #   top      – COGO grid + row/move buttons
+        #   summary  – Parse Summary
+        #   middle   – Ignored / Unparsed review
+        #   bottom   – Parcel Preview + Validation
         output_splitter = QSplitter(Qt.Vertical)
 
         # ── Section 1: COGO grid ────────────────────────────────────────
-        grid_section = QWidget()
-        grid_layout = QVBoxLayout(grid_section)
-        grid_layout.setContentsMargins(4, 4, 4, 4)
+        cogo_section = QWidget()
+        cogo_layout = QVBoxLayout(cogo_section)
+        cogo_layout.setContentsMargins(4, 4, 4, 4)
 
         table_label = QLabel("Extracted COGO Courses")
         table_label.setStyleSheet("font-size: 16px; font-weight: 600;")
-        grid_layout.addWidget(table_label)
+        cogo_layout.addWidget(table_label)
 
         self.course_table = QTableWidget(0, 6)
         self.course_table.setHorizontalHeaderLabels(
@@ -431,7 +432,7 @@ class ParcelDesktopApp(QMainWindow):
         self.course_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.course_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.course_table.itemSelectionChanged.connect(self._on_course_row_selected)
-        grid_layout.addWidget(self.course_table, stretch=1)
+        cogo_layout.addWidget(self.course_table, stretch=1)
 
         row_button_row = QHBoxLayout()
         add_row_btn = QPushButton("Add Row")
@@ -441,7 +442,7 @@ class ParcelDesktopApp(QMainWindow):
         del_row_btn = QPushButton("Delete Selected Row")
         del_row_btn.clicked.connect(self.delete_selected_row)
         row_button_row.addWidget(del_row_btn)
-        grid_layout.addLayout(row_button_row)
+        cogo_layout.addLayout(row_button_row)
 
         move_row_row = QHBoxLayout()
         up_btn = QPushButton("Move Row Up")
@@ -455,11 +456,18 @@ class ParcelDesktopApp(QMainWindow):
         clear_btn = QPushButton("Clear Rows")
         clear_btn.clicked.connect(self.clear_rows)
         move_row_row.addWidget(clear_btn)
-        grid_layout.addLayout(move_row_row)
+        cogo_layout.addLayout(move_row_row)
+
+        output_splitter.addWidget(cogo_section)
+
+        # ── Section 2: Parse Summary ────────────────────────────────────
+        summary_section = QWidget()
+        summary_section_layout = QVBoxLayout(summary_section)
+        summary_section_layout.setContentsMargins(4, 4, 4, 4)
 
         summary_label = QLabel("Parse Summary")
         summary_label.setStyleSheet("font-size: 16px; font-weight: 600;")
-        grid_layout.addWidget(summary_label)
+        summary_section_layout.addWidget(summary_label)
 
         summary_panel = QWidget()
         summary_layout = QFormLayout(summary_panel)
@@ -471,11 +479,12 @@ class ParcelDesktopApp(QMainWindow):
         summary_layout.addRow("Connection / Reference Ties:", self.summary_ties_count)
         summary_layout.addRow("Parse Errors:", self.summary_errors_count)
         summary_layout.addRow("Closure Misclose:", self.summary_closure)
-        grid_layout.addWidget(summary_panel)
+        summary_section_layout.addWidget(summary_panel)
+        summary_section_layout.addStretch(1)
 
-        output_splitter.addWidget(grid_section)
+        output_splitter.addWidget(summary_section)
 
-        # ── Section 2: Ignored / Unparsed review ───────────────────────
+        # ── Section 3: Ignored / Unparsed review ───────────────────────
         ignored_section = QWidget()
         ignored_layout = QVBoxLayout(ignored_section)
         ignored_layout.setContentsMargins(4, 4, 4, 4)
@@ -493,7 +502,7 @@ class ParcelDesktopApp(QMainWindow):
         ignored_layout.addWidget(ignored_note)
 
         self.ignored_table = QTableWidget(0, 2)
-        self.ignored_table.setMinimumHeight(160)
+        self.ignored_table.setMinimumHeight(120)
         self.ignored_table.setHorizontalHeaderLabels(["Type", "Text"])
         self.ignored_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         self.ignored_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
@@ -505,7 +514,7 @@ class ParcelDesktopApp(QMainWindow):
 
         output_splitter.addWidget(ignored_section)
 
-        # ── Section 3: Parcel Preview + Validation ─────────────────────
+        # ── Section 4: Parcel Preview + Validation ─────────────────────
         preview_section = QWidget()
         preview_layout = QVBoxLayout(preview_section)
         preview_layout.setContentsMargins(4, 4, 4, 4)
@@ -515,7 +524,7 @@ class ParcelDesktopApp(QMainWindow):
         preview_layout.addWidget(preview_label)
 
         self.canvas = ParcelCanvas()
-        self.canvas.setMinimumHeight(260)
+        self.canvas.setMinimumHeight(180)
         preview_layout.addWidget(self.canvas, stretch=1)
 
         validation_label = QLabel("Validation")
@@ -537,8 +546,12 @@ class ParcelDesktopApp(QMainWindow):
 
         output_splitter.addWidget(preview_section)
 
-        # grid ~40 % | ignored ~26 % | preview+validation ~34 %
-        output_splitter.setSizes([360, 230, 310])
+        # COGO ~43 % | summary ~13 % | ignored ~19 % | preview+validation ~25 %
+        output_splitter.setSizes([430, 130, 190, 250])
+        output_splitter.setStretchFactor(0, 3)
+        output_splitter.setStretchFactor(1, 1)
+        output_splitter.setStretchFactor(2, 1)
+        output_splitter.setStretchFactor(3, 2)
 
         pane_layout.addWidget(output_splitter)
 
