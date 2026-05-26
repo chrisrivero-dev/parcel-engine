@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
     QMainWindow,
     QMessageBox,
     QPushButton,
@@ -46,7 +47,14 @@ from transcription.parser_v2 import parse_legal_description
 from ui.image_viewer import ReferenceImageViewer
 from ui.manual_courses import build_manual_line
 from ui.ocr_config import OCR_SETUP_MESSAGE, resolve_tesseract_path
-from ui.ocr_runner import OcrFailed, PytesseractMissing, TesseractNotFound, run_ocr
+from ui.ocr_runner import (
+    OcrError,
+    OcrFailed,
+    PytesseractMissing,
+    TesseractNotFound,
+    run_ocr,
+    run_ocr_lines,
+)
 
 Point = Tuple[float, float]
 
@@ -201,6 +209,7 @@ class ParcelDesktopApp(QMainWindow):
         self._last_errors_count = 0
         self._last_ties_count = 0
         self._ignored_chunks: list = []
+        self._ocr_lines: list = []
         self.project: ParcelProject = ParcelProject()
 
         self._build_toolbar()
@@ -293,6 +302,18 @@ class ParcelDesktopApp(QMainWindow):
         ocr_draft_buttons.addWidget(accept_ocr_btn)
         ocr_draft_buttons.addStretch(1)
         left_layout.addLayout(ocr_draft_buttons)
+
+        self.ocr_lines_label = QLabel("OCR Lines (select to locate on image)")
+        self.ocr_lines_label.setStyleSheet(
+            "font-size: 13px; font-weight: 600; color: #6b7280;"
+        )
+        self.ocr_lines_label.setVisible(False)
+        left_layout.addWidget(self.ocr_lines_label)
+
+        self.ocr_lines_list = QListWidget()
+        self.ocr_lines_list.setVisible(False)
+        self.ocr_lines_list.itemSelectionChanged.connect(self._on_ocr_line_selected)
+        left_layout.addWidget(self.ocr_lines_list, stretch=1)
 
         button_row = QHBoxLayout()
 
@@ -820,6 +841,38 @@ class ParcelDesktopApp(QMainWindow):
             return
 
         self.ocr_draft_input.setPlainText(text)
+        self._populate_ocr_lines(image_path)
+
+    def _populate_ocr_lines(self, image_path: str) -> None:
+        self._ocr_lines = []
+        self.ocr_lines_list.clear()
+        self.reference_image_viewer.clear_highlight()
+
+        try:
+            lines = run_ocr_lines(image_path)
+        except OcrError:
+            lines = []
+
+        self._ocr_lines = lines
+        for line in lines:
+            if line.confidence is not None:
+                label = f"[{line.confidence:.0f}%] {line.text}"
+            else:
+                label = line.text
+            self.ocr_lines_list.addItem(label)
+
+        has_lines = bool(lines)
+        self.ocr_lines_label.setVisible(has_lines)
+        self.ocr_lines_list.setVisible(has_lines)
+
+    def _on_ocr_line_selected(self) -> None:
+        row = self.ocr_lines_list.currentRow()
+        if row < 0 or row >= len(self._ocr_lines):
+            return
+        line = self._ocr_lines[row]
+        self.reference_image_viewer.highlight_box(
+            line.x, line.y, line.width, line.height
+        )
 
     def accept_ocr_draft(self) -> None:
         draft = self.ocr_draft_input.toPlainText()

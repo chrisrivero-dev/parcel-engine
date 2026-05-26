@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QPixmap
+from PySide6.QtGui import QColor, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QLabel, QScrollArea, QSizePolicy, QVBoxLayout, QWidget
 
 
@@ -21,6 +21,7 @@ class ReferenceImageViewer(QWidget):
 
         self._pixmap: QPixmap | None = None
         self._current_path: str | None = None
+        self._highlight: tuple[int, int, int, int] | None = None
 
         self._label = QLabel("No reference image loaded.")
         self._label.setAlignment(Qt.AlignCenter)
@@ -42,6 +43,7 @@ class ReferenceImageViewer(QWidget):
             return False
         self._pixmap = pixmap
         self._current_path = file_path
+        self._highlight = None
         self._label.setStyleSheet("")
         self._rescale()
         return True
@@ -49,12 +51,22 @@ class ReferenceImageViewer(QWidget):
     def clear(self) -> None:
         self._pixmap = None
         self._current_path = None
+        self._highlight = None
         self._label.setStyleSheet("color: #6b7280;")
         self._label.setText("No reference image loaded.")
 
     @property
     def current_path(self) -> str | None:
         return self._current_path
+
+    def highlight_box(self, x: int, y: int, width: int, height: int) -> None:
+        """Highlight one rectangle, given in original-image pixel coords."""
+        self._highlight = (x, y, width, height)
+        self._rescale()
+
+    def clear_highlight(self) -> None:
+        self._highlight = None
+        self._rescale()
 
     def resizeEvent(self, event) -> None:  # noqa: N802 (Qt API)
         super().resizeEvent(event)
@@ -69,4 +81,22 @@ class ReferenceImageViewer(QWidget):
         scaled = self._pixmap.scaled(
             target, Qt.KeepAspectRatio, Qt.SmoothTransformation
         )
+        if self._highlight is not None:
+            scaled = self._draw_highlight(scaled)
         self._label.setPixmap(scaled)
+
+    def _draw_highlight(self, scaled: QPixmap) -> QPixmap:
+        if self._pixmap is None or self._pixmap.width() == 0:
+            return scaled
+        sx = scaled.width() / self._pixmap.width()
+        sy = scaled.height() / self._pixmap.height()
+        x, y, w, h = self._highlight
+
+        canvas = QPixmap(scaled)
+        painter = QPainter(canvas)
+        pen = QPen(QColor(220, 38, 38))
+        pen.setWidth(2)
+        painter.setPen(pen)
+        painter.drawRect(int(x * sx), int(y * sy), int(w * sx), int(h * sy))
+        painter.end()
+        return canvas
