@@ -502,6 +502,7 @@ class ParcelDesktopApp(QMainWindow):
         preview_layout.addWidget(preview_label)
 
         self.canvas = ParcelCanvas()
+        self.canvas.setMinimumHeight(320)
         preview_layout.addWidget(self.canvas, stretch=4)
 
         validation_label = QLabel("Validation")
@@ -522,8 +523,9 @@ class ParcelDesktopApp(QMainWindow):
         preview_layout.addWidget(self.validation_panel)
 
         output_splitter.addWidget(preview_section)
-        # COGO table + summary + ignored ~58 %, canvas + validation ~42 %
-        output_splitter.setSizes([520, 380])
+        # COGO table + summary + ignored ~45 %, canvas + validation ~55 %
+        # so the parcel preview is large enough to verify the traverse.
+        output_splitter.setSizes([400, 500])
 
         pane_layout.addWidget(output_splitter)
 
