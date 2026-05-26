@@ -403,17 +403,22 @@ class ParcelDesktopApp(QMainWindow):
 
         return pane
 
-    # ── Right pane: COGO grid / preview / validation ───────────────────
+    # ── Right pane: COGO grid / ignored review / preview+validation ───────────
     def _build_output_pane(self) -> QWidget:
         pane = QWidget()
         pane_layout = QVBoxLayout(pane)
+        pane_layout.setContentsMargins(0, 0, 0, 0)
 
+        # Three vertical sections so each gets its own resizable slice:
+        #   top    – COGO grid + row/move buttons + summary
+        #   middle – Ignored / Unparsed review
+        #   bottom – Parcel Preview + Validation
         output_splitter = QSplitter(Qt.Vertical)
 
-        # Top: COGO grid + manual editing + summary + ignored review.
+        # ── Section 1: COGO grid ────────────────────────────────────────
         grid_section = QWidget()
         grid_layout = QVBoxLayout(grid_section)
-        grid_layout.setContentsMargins(0, 0, 0, 0)
+        grid_layout.setContentsMargins(4, 4, 4, 4)
 
         table_label = QLabel("Extracted COGO Courses")
         table_label.setStyleSheet("font-size: 16px; font-weight: 600;")
@@ -426,7 +431,7 @@ class ParcelDesktopApp(QMainWindow):
         self.course_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.course_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.course_table.itemSelectionChanged.connect(self._on_course_row_selected)
-        grid_layout.addWidget(self.course_table, stretch=3)
+        grid_layout.addWidget(self.course_table, stretch=1)
 
         row_button_row = QHBoxLayout()
         add_row_btn = QPushButton("Add Row")
@@ -468,9 +473,16 @@ class ParcelDesktopApp(QMainWindow):
         summary_layout.addRow("Closure Misclose:", self.summary_closure)
         grid_layout.addWidget(summary_panel)
 
+        output_splitter.addWidget(grid_section)
+
+        # ── Section 2: Ignored / Unparsed review ───────────────────────
+        ignored_section = QWidget()
+        ignored_layout = QVBoxLayout(ignored_section)
+        ignored_layout.setContentsMargins(4, 4, 4, 4)
+
         ignored_label = QLabel("Ignored / Unparsed Text")
         ignored_label.setStyleSheet("font-size: 16px; font-weight: 600;")
-        grid_layout.addWidget(ignored_label)
+        ignored_layout.addWidget(ignored_label)
 
         ignored_note = QLabel(
             "Review skipped text. Correct OCR/source text in the middle pane, "
@@ -478,7 +490,7 @@ class ParcelDesktopApp(QMainWindow):
         )
         ignored_note.setStyleSheet("font-size: 11px; color: #6b7280;")
         ignored_note.setWordWrap(True)
-        grid_layout.addWidget(ignored_note)
+        ignored_layout.addWidget(ignored_note)
 
         self.ignored_table = QTableWidget(0, 2)
         self.ignored_table.setHorizontalHeaderLabels(["Type", "Text"])
@@ -488,22 +500,22 @@ class ParcelDesktopApp(QMainWindow):
         self.ignored_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.ignored_table.setWordWrap(True)
         self.ignored_table.itemSelectionChanged.connect(self._on_ignored_row_selected)
-        grid_layout.addWidget(self.ignored_table, stretch=1)
+        ignored_layout.addWidget(self.ignored_table, stretch=1)
 
-        output_splitter.addWidget(grid_section)
+        output_splitter.addWidget(ignored_section)
 
-        # Bottom: parcel preview + validation.
+        # ── Section 3: Parcel Preview + Validation ─────────────────────
         preview_section = QWidget()
         preview_layout = QVBoxLayout(preview_section)
-        preview_layout.setContentsMargins(0, 0, 0, 0)
+        preview_layout.setContentsMargins(4, 4, 4, 4)
 
         preview_label = QLabel("Parcel Preview")
         preview_label.setStyleSheet("font-size: 16px; font-weight: 600;")
         preview_layout.addWidget(preview_label)
 
         self.canvas = ParcelCanvas()
-        self.canvas.setMinimumHeight(320)
-        preview_layout.addWidget(self.canvas, stretch=4)
+        self.canvas.setMinimumHeight(280)
+        preview_layout.addWidget(self.canvas, stretch=1)
 
         validation_label = QLabel("Validation")
         validation_label.setStyleSheet("font-size: 16px; font-weight: 600;")
@@ -523,9 +535,9 @@ class ParcelDesktopApp(QMainWindow):
         preview_layout.addWidget(self.validation_panel)
 
         output_splitter.addWidget(preview_section)
-        # COGO table + summary + ignored ~45 %, canvas + validation ~55 %
-        # so the parcel preview is large enough to verify the traverse.
-        output_splitter.setSizes([400, 500])
+
+        # grid ~40 % | ignored ~15 % | preview+validation ~45 %
+        output_splitter.setSizes([360, 135, 405])
 
         pane_layout.addWidget(output_splitter)
 
@@ -668,7 +680,11 @@ class ParcelDesktopApp(QMainWindow):
         self.course_table.setItem(row, 1, QTableWidgetItem("Line"))
         for col in (2, 3, 4, 5):
             self.course_table.setItem(row, col, QTableWidgetItem(""))
-        self.course_table.editItem(self.course_table.item(row, 2))
+        # Scroll the new row into view before opening the inline editor;
+        # editItem silently no-ops when the target cell is outside the viewport.
+        item = self.course_table.item(row, 2)
+        self.course_table.scrollToItem(item)
+        self.course_table.editItem(item)
 
     def delete_selected_row(self) -> None:
         selection = self.course_table.selectionModel()
