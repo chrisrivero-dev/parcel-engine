@@ -524,7 +524,7 @@ class ParcelDesktopApp(QMainWindow):
         preview_layout.addWidget(preview_label)
 
         self.canvas = ParcelCanvas()
-        self.canvas.setMinimumHeight(180)
+        self.canvas.setMinimumHeight(280)
         preview_layout.addWidget(self.canvas, stretch=1)
 
         validation_label = QLabel("Validation")
@@ -546,12 +546,12 @@ class ParcelDesktopApp(QMainWindow):
 
         output_splitter.addWidget(preview_section)
 
-        # COGO ~43 % | summary ~13 % | ignored ~19 % | preview+validation ~25 %
-        output_splitter.setSizes([430, 130, 190, 250])
+        # COGO ~40 % | summary ~10 % | ignored ~15 % | preview+validation ~35 %
+        output_splitter.setSizes([400, 100, 150, 350])
         output_splitter.setStretchFactor(0, 3)
         output_splitter.setStretchFactor(1, 1)
         output_splitter.setStretchFactor(2, 1)
-        output_splitter.setStretchFactor(3, 2)
+        output_splitter.setStretchFactor(3, 3)
 
         pane_layout.addWidget(output_splitter)
 
