@@ -493,6 +493,7 @@ class ParcelDesktopApp(QMainWindow):
         ignored_layout.addWidget(ignored_note)
 
         self.ignored_table = QTableWidget(0, 2)
+        self.ignored_table.setMinimumHeight(160)
         self.ignored_table.setHorizontalHeaderLabels(["Type", "Text"])
         self.ignored_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         self.ignored_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
@@ -514,7 +515,7 @@ class ParcelDesktopApp(QMainWindow):
         preview_layout.addWidget(preview_label)
 
         self.canvas = ParcelCanvas()
-        self.canvas.setMinimumHeight(280)
+        self.canvas.setMinimumHeight(260)
         preview_layout.addWidget(self.canvas, stretch=1)
 
         validation_label = QLabel("Validation")
@@ -536,8 +537,8 @@ class ParcelDesktopApp(QMainWindow):
 
         output_splitter.addWidget(preview_section)
 
-        # grid ~40 % | ignored ~15 % | preview+validation ~45 %
-        output_splitter.setSizes([360, 135, 405])
+        # grid ~40 % | ignored ~26 % | preview+validation ~34 %
+        output_splitter.setSizes([360, 230, 310])
 
         pane_layout.addWidget(output_splitter)
 
