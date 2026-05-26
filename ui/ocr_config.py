@@ -37,8 +37,9 @@ def resolve_tesseract_path(
 
     Resolution order:
       1. PARCEL_ENGINE_TESSERACT env var (if it points to an existing file)
-      2. Common Windows install locations
-      3. `tesseract` on PATH
+      2. Common Windows system-wide install locations (Program Files)
+      3. Per-user Windows install: %LOCALAPPDATA%\\Programs\\Tesseract-OCR\\tesseract.exe
+      4. `tesseract` on PATH
 
     All filesystem and PATH lookups are injectable for testing.
     """
@@ -49,6 +50,14 @@ def resolve_tesseract_path(
         return env_path
 
     for candidate in _COMMON_WINDOWS_PATHS:
+        if path_exists(candidate):
+            return candidate
+
+    localappdata = env.get("LOCALAPPDATA")
+    if localappdata:
+        candidate = os.path.join(
+            localappdata, "Programs", "Tesseract-OCR", "tesseract.exe"
+        )
         if path_exists(candidate):
             return candidate
 

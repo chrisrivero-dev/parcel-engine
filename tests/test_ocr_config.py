@@ -1,3 +1,5 @@
+import os
+
 from ui.ocr_config import ENV_VAR, OCR_SETUP_MESSAGE, resolve_tesseract_path
 
 
@@ -68,3 +70,43 @@ def test_env_var_takes_priority_over_windows_paths():
 def test_setup_message_mentions_env_var_and_manual_workflow():
     assert ENV_VAR in OCR_SETUP_MESSAGE
     assert "manual" in OCR_SETUP_MESSAGE.lower()
+
+
+def test_localappdata_per_user_install_found():
+    localappdata = r"C:\Users\testuser\AppData\Local"
+    expected = os.path.join(localappdata, "Programs", "Tesseract-OCR", "tesseract.exe")
+    result = resolve_tesseract_path(
+        env={"LOCALAPPDATA": localappdata},
+        path_exists=lambda p: p == expected,
+        path_which=_no_which,
+    )
+    assert result == expected
+
+
+def test_env_var_takes_priority_over_localappdata():
+    localappdata = r"C:\Users\testuser\AppData\Local"
+    result = resolve_tesseract_path(
+        env={ENV_VAR: "/custom/tesseract", "LOCALAPPDATA": localappdata},
+        path_exists=lambda p: True,
+        path_which=_no_which,
+    )
+    assert result == "/custom/tesseract"
+
+
+def test_invalid_localappdata_path_ignored_safely():
+    localappdata = r"C:\Users\testuser\AppData\Local"
+    result = resolve_tesseract_path(
+        env={"LOCALAPPDATA": localappdata},
+        path_exists=_no_files,
+        path_which=_no_which,
+    )
+    assert result is None
+
+
+def test_path_fallback_used_when_localappdata_missing():
+    result = resolve_tesseract_path(
+        env={},
+        path_exists=_no_files,
+        path_which=lambda name: "/usr/local/bin/tesseract" if name == "tesseract" else None,
+    )
+    assert result == "/usr/local/bin/tesseract"
