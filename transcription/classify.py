@@ -130,6 +130,10 @@ def classify(text: str) -> List[Chunk]:
 
         if parsed is None:
             chunks.append(Chunk(raw=clause, kind=KIND_NOTE, parsed_line=None, source_span=span))
+
+            if phase == "pre_pob" and _POB_RE.search(clause):
+                phase = "boundary"
+
             continue
 
         if phase == "pre_pob":

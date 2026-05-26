@@ -159,3 +159,60 @@ def test_mixed_ocr_sample_parses_only_safe_exact_bearings():
         ("S", 34, 39, 40, "W", 113.31),
         ("N", 81, 18, 15, "W", 67.65),
     ]
+def test_true_point_boundary_phrase_switches_subsequent_calls_to_boundary():
+    text = (
+        "THAT PORTION OF LOT 2 OF FRACTIONAL SECTION 13, IN TOWNSHIP 7 SOUTH, "
+        "RANGE 9 WEST, SAN BERNARDINO BASE AND MERIDIAN, IN THE CITY OF LAGUNA BEACH, "
+        "COUNTY OF ORANGE, STATE OF CALIFORNIA, DESCRIBED AS FOLLOWS: "
+        "COMMENCING AT STATION 453+00.85, A POINT ON THE CENTER LINE OF LAGUNA CANYON ROAD, "
+        "AS SHOWN ON A MAP THEREOF APPROVED BY NAT NEFF, SUPERINTENDENT OF HIGHWAYS "
+        "OF ORANGE COUNTY, CALIFORNIA, ON NOVEMBER 4, 1929, SAID POINT BEING THE "
+        "NORTHWEST CORNER OF A PARCEL OF LAND DESCRIBED IN DEED TO ARCH CRAIG BY THE "
+        "YOCH COMPANY, RECORDED MARCH 5, 1930 IN BOOK 366, PAGE 48, OF OFFICIAL RECORDS; "
+        "THENCE SOUTHERLY FOLLOWING THE CENTERLINE OF LAGUNA CANYON ROAD, 1459.15 FEET "
+        "TO THE MOST WESTERLY CORNER OF THE PARCEL OF LAND CONVEYED TO PATRICIA M. GOLDBAR, "
+        "BY DEED DATED MAY 27, 1939 AND RECORDED IN BOOK 998, PAGE 253, OF OFFICIAL RECORDS, "
+        "SAID CORNER BEING THE TRUE POINT OF BEGINNING OF THE BOUNDARY OF THE PROPERTY "
+        "DESCRIBED HEREIN; "
+        "THENCE SOUTH 58°49' WEST, ALONG THE SOUTHWESTERLY LINE OF SAID LAND OF GOLDBAR, "
+        "197.18 FEET TO THE MOST SOUTHERLY CORNER OF SAID LAND; "
+        "THENCE SOUTH 17°59'28\" WEST 109.90 FEET MORE OR LESS TO THE NORTHEASTERLY CORNER "
+        "OF THE PARCEL OF LAND CONVEYED TO GEORGIA DAY ROBERTSON, AND OTHERS BY DEED "
+        "DATED MAY 27, 1939 AND RECORDED IN BOOK 1001, PAGE 119, OF OFFICIAL RECORDS; "
+        "THENCE NORTH 58°49' WEST, ALONG THE NORTHEASTERLY LINE OF SAID LAND OF ROBERTSON, "
+        "222.26 FEET TO THE CENTER LINE OF LAGUNA CANYON ROAD; "
+        "THENCE NORTH 31°11' EAST, ALONG SAID CENTER LINE 107 FEET TO THE TRUE POINT OF BEGINNING. "
+        "PARCEL 2: THE NORTHEASTERLY 107.00 FEET OF THAT CERTAIN PARCEL OF LAND DESCRIBED "
+        "IN A DEED TO ROBERT P. KELLOGG AND HAZEL A. KELLOGG, RECORDED OCTOBER 6, 1944 "
+        "IN BOOK 1285, PAGE 357, OF OFFICIAL RECORDS, RECORDS OF ORANGE COUNTY, STATE OF CALIFORNIA."
+    )
+
+    calls, ties, errors, ignored = _parse_one(text)
+
+    assert errors == []
+    assert len(calls) == 4
+
+    parsed = [
+        (
+            c.bearing.value.quadrant_ns,
+            c.bearing.value.angle.deg,
+            c.bearing.value.angle.minutes,
+            int(c.bearing.value.angle.seconds),
+            c.bearing.value.quadrant_ew,
+            c.distance.value,
+        )
+        for c in calls
+    ]
+
+    assert parsed == [
+        ("S", 58, 49, 0, "W", 197.18),
+        ("S", 17, 59, 28, "W", 109.90),
+        ("N", 58, 49, 0, "W", 222.26),
+        ("N", 31, 11, 0, "E", 107.0),
+    ]
+
+    assert not any(
+        getattr(t.get("parsed_line"), "distance", None)
+        and t["parsed_line"].distance.value == 1459.15
+        for t in ties
+    )
