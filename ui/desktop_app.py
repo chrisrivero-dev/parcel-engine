@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QGraphicsView,
     QHeaderView,
     QHBoxLayout,
+    QGroupBox,
     QLabel,
     QLineEdit,
     QListWidget,
