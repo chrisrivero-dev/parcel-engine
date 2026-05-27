@@ -77,6 +77,53 @@ def _header_type(match: re.Match) -> str:
     return TYPE_PARCEL
 
 
+def _at_section_boundary(text: str, pos: int) -> bool:
+    """Return True when *pos* is a safe place to start a section header.
+
+    Safe positions: start of text, after a newline/tab, or after sentence-
+    ending punctuation (. ; : ! ?) optionally followed by horizontal
+    whitespace.  This prevents mid-sentence "PARCEL" occurrences without
+    boundary punctuation from being treated as headers.
+    """
+    if pos == 0:
+        return True
+    look = pos - 1
+    while look >= 0 and text[look] in " \t":
+        look -= 1
+    return look < 0 or text[look] in ".\n;:!?"
+
+
+def _absorb_punctuation_bridges(
+    sections: List[LegalTextSection],
+) -> List[LegalTextSection]:
+    """Fold punctuation-only UNKNOWN sections into the preceding section.
+
+    When the POB phrase ends just before a section header (e.g. "…BEGINNING.
+    PARCEL 1:"), the period-space between them becomes a tiny BOUNDARY slice.
+    Absorbing it backward into the commencement/boilerplate keeps the list
+    clean while preserving the concatenation invariant.
+    """
+    _PUNCT_ONLY = re.compile(r"^[\s.;,:!?]+$")
+    result: List[LegalTextSection] = []
+    for sec in sections:
+        if (
+            result
+            and sec.section_type == TYPE_UNKNOWN
+            and _PUNCT_ONLY.match(sec.text)
+        ):
+            prev = result[-1]
+            result[-1] = LegalTextSection(
+                label=prev.label,
+                section_type=prev.section_type,
+                text=prev.text + sec.text,
+                start=prev.start,
+                end=sec.end,
+            )
+        else:
+            result.append(sec)
+    return result
+
+
 def split_legal_text_sections(text: str) -> List[LegalTextSection]:
     """Split ``text`` into ordered :class:`LegalTextSection` slices.
 
@@ -87,7 +134,10 @@ def split_legal_text_sections(text: str) -> List[LegalTextSection]:
     if not text or not text.strip():
         return []
 
-    headers = list(_HEADER_RE.finditer(text))
+    headers = [
+        h for h in _HEADER_RE.finditer(text)
+        if _at_section_boundary(text, h.start())
+    ]
     header_starts = {h.start(): h for h in headers}
 
     lead_end = headers[0].start() if headers else len(text)
@@ -108,7 +158,7 @@ def split_legal_text_sections(text: str) -> List[LegalTextSection]:
         label, stype = _classify(a, header_starts, pob_end)
         sections.append(LegalTextSection(label, stype, text[a:b], a, b))
 
-    return _merge_leading_whitespace(sections)
+    return _absorb_punctuation_bridges(_merge_leading_whitespace(sections))
 
 
 def _classify(

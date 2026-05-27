@@ -148,6 +148,95 @@ def test_sections_are_frozen_dataclasses():
 
 
 # ---------------------------------------------------------------------------
+# Inline-header detection
+# ---------------------------------------------------------------------------
+
+def test_inline_parcel_after_sentence_is_detected():
+    """'PARCEL 1:' after '. ' is treated as a parcel section."""
+    text = "Boilerplate text. PARCEL 1: THENCE NORTH 100 FEET."
+    sections = split_legal_text_sections(text)
+    parcels = [s for s in sections if s.section_type == TYPE_PARCEL]
+    assert len(parcels) == 1
+    assert parcels[0].label == "PARCEL 1"
+    assert _concat(sections) == text
+
+
+def test_two_inline_parcels_in_one_paragraph():
+    """Two inline parcel headers in one paragraph → two parcel sections."""
+    text = (
+        "Some boilerplate. PARCEL 1: THENCE NORTH 100 FEET. "
+        "PARCEL 2: THENCE EAST 50 FEET."
+    )
+    sections = split_legal_text_sections(text)
+    parcels = [s for s in sections if s.section_type == TYPE_PARCEL]
+    assert len(parcels) == 2
+    assert parcels[0].label == "PARCEL 1"
+    assert parcels[1].label == "PARCEL 2"
+    assert _concat(sections) == text
+
+
+def test_text_before_inline_parcel_is_boilerplate():
+    """Content before the first inline header is preserved as boilerplate."""
+    text = "Introductory language here. PARCEL 1: THENCE NORTH 100 FEET."
+    sections = split_legal_text_sections(text)
+    assert sections[0].section_type in (TYPE_BOILERPLATE, TYPE_COMMENCEMENT)
+    assert "Introductory language" in sections[0].text
+    assert _concat(sections) == text
+
+
+def test_inline_parcel_after_pob_no_junk_section():
+    """No spurious punctuation-only section between POB phrase and inline PARCEL."""
+    text = (
+        "COMMENCING AT A POINT; THENCE TO THE TRUE POINT OF BEGINNING. "
+        "PARCEL 1: THENCE NORTH 100 FEET. "
+        "PARCEL 2: THENCE EAST 50 FEET."
+    )
+    sections = split_legal_text_sections(text)
+    # No tiny punctuation-bridge section should appear
+    types = [s.section_type for s in sections]
+    assert TYPE_UNKNOWN not in types, f"Unexpected UNKNOWN section: {sections}"
+    assert types.count(TYPE_PARCEL) == 2
+    assert _concat(sections) == text
+
+
+def test_inline_easement_after_parcel():
+    """EASEMENT PARCEL after '. ' is classified as easement, not parcel."""
+    text = (
+        "PARCEL 1: THENCE NORTH 100 FEET. "
+        "EASEMENT PARCEL: FOR INGRESS AND EGRESS."
+    )
+    sections = split_legal_text_sections(text)
+    easements = [s for s in sections if s.section_type == TYPE_EASEMENT]
+    assert len(easements) == 1
+    assert _concat(sections) == text
+
+
+def test_inline_no_boundary_not_a_false_positive():
+    """'PARCEL 1' mid-sentence without boundary punctuation does not split."""
+    text = "The property is PARCEL 1 of the subdivision, containing 5 acres."
+    sections = split_legal_text_sections(text)
+    assert all(s.section_type != TYPE_PARCEL for s in sections)
+    assert _concat(sections) == text
+
+
+def test_no_text_lost_inline_complex():
+    """Concatenating inline-split sections always reproduces the source exactly."""
+    text = (
+        "EXHIBIT A\n"
+        "LEGAL DESCRIPTION: ALL THAT LAND.\n"
+        "TRUE POINT OF BEGINNING. PARCEL 1: THENCE NORTH 100 FEET. "
+        "PARCEL 2: THENCE EAST 50 FEET; "
+        "EASEMENT PARCEL: FOR DRAINAGE."
+    )
+    sections = split_legal_text_sections(text)
+    assert _concat(sections) == text
+    assert sections[0].start == 0
+    assert sections[-1].end == len(text)
+    for prev, nxt in zip(sections, sections[1:]):
+        assert prev.end == nxt.start
+
+
+# ---------------------------------------------------------------------------
 # resolve_parse_text — pure selector helper used by the UI workflow
 # ---------------------------------------------------------------------------
 
