@@ -43,6 +43,8 @@ from exporters.dxf import export_dxf
 from geometry.builder import build_geometry
 from transcription.normalize import normalize
 from transcription.parser_v2 import parse_legal_description
+from transcription.sections import split_legal_text_sections
+from ui.section_select import FULL_TEXT_LABEL, resolve_parse_text
 from ui.image_viewer import ReferenceImageViewer
 from ui.manual_courses import build_manual_line
 from ui.ocr_config import OCR_SETUP_MESSAGE, resolve_tesseract_path
@@ -209,6 +211,7 @@ class ParcelDesktopApp(QMainWindow):
         self._last_errors_count = 0
         self._last_ties_count = 0
         self._ignored_chunks: list = []
+        self._detected_sections: list = []
         self._ocr_lines: list = []
         self.project: ParcelProject = ParcelProject()
 
@@ -376,6 +379,27 @@ class ParcelDesktopApp(QMainWindow):
         # Legal tall, OCR Draft readable, OCR Lines enough to inspect
         review_splitter.setSizes([340, 260, 160])
         pane_layout.addWidget(review_splitter, stretch=1)
+
+        # Optional section selector: lets the user parse the full text
+        # (default) or one detected section of a multi-parcel deed.
+        section_row = QHBoxLayout()
+        section_row.addWidget(QLabel("Parse target:"))
+        self.section_combo = QComboBox()
+        self.section_combo.addItem(FULL_TEXT_LABEL)
+        self.section_combo.setToolTip(
+            "Choose which text Parse Courses uses. Full text is the default; "
+            "click Detect Sections to list parcels / easements / exhibits."
+        )
+        section_row.addWidget(self.section_combo, stretch=1)
+
+        detect_btn = QPushButton("Detect Sections")
+        detect_btn.clicked.connect(self.detect_sections)
+        section_row.addWidget(detect_btn)
+        pane_layout.addLayout(section_row)
+
+        # Changing the source text invalidates any detected sections so a
+        # stale selection can never be applied to different text.
+        self.legal_input.textChanged.connect(self._reset_detected_sections)
 
         button_row = QHBoxLayout()
 
@@ -585,8 +609,52 @@ class ParcelDesktopApp(QMainWindow):
     def show_error(self, message: str) -> None:
         QMessageBox.warning(self, "Build Failed", message)
 
+    def _reset_detected_sections(self) -> None:
+        """Drop detected sections and reset the selector to Full text.
+
+        Called whenever the Legal Source Text changes so a previously
+        detected section can never be parsed against different text.
+        """
+        if not self._detected_sections and self.section_combo.count() <= 1:
+            return
+        self._detected_sections = []
+        self.section_combo.blockSignals(True)
+        self.section_combo.clear()
+        self.section_combo.addItem(FULL_TEXT_LABEL)
+        self.section_combo.setCurrentIndex(0)
+        self.section_combo.blockSignals(False)
+
+    def detect_sections(self) -> None:
+        """Populate the selector with sections found in the source text.
+
+        The original Legal Source Text is never modified; this only fills
+        the dropdown. Full text remains index 0 and stays selected.
+        """
+        full_text = self.legal_input.toPlainText()
+        sections = split_legal_text_sections(full_text)
+        self._detected_sections = sections
+
+        self.section_combo.blockSignals(True)
+        self.section_combo.clear()
+        self.section_combo.addItem(FULL_TEXT_LABEL)
+        for sec in sections:
+            self.section_combo.addItem(f"{sec.label} ({sec.section_type})")
+        self.section_combo.setCurrentIndex(0)
+        self.section_combo.blockSignals(False)
+
+        if not sections:
+            QMessageBox.information(
+                self,
+                "No Sections Detected",
+                "No parcel / easement / exhibit sections were found. "
+                "Parse Courses will use the full text.",
+            )
+
     def parse_legal_text(self) -> None:
-        text = self.legal_input.toPlainText().strip()
+        full_text = self.legal_input.toPlainText()
+        text = resolve_parse_text(
+            full_text, self._detected_sections, self.section_combo.currentIndex()
+        ).strip()
 
         if not text:
             QMessageBox.warning(self, "No Text", "Paste a legal description first.")

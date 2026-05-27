@@ -145,3 +145,40 @@ def test_sections_are_frozen_dataclasses():
     assert isinstance(section, LegalTextSection)
     with pytest.raises(Exception):
         section.label = "X"  # frozen → immutable
+
+
+# ---------------------------------------------------------------------------
+# resolve_parse_text — pure selector helper used by the UI workflow
+# ---------------------------------------------------------------------------
+
+from ui.section_select import resolve_parse_text
+
+
+def _mk(text):
+    return LegalTextSection(label="X", section_type="parcel", text=text, start=0, end=len(text))
+
+
+def test_resolve_full_text_when_index_zero():
+    full = "PARCEL 1: A; PARCEL 2: B"
+    sections = [_mk("PARCEL 1: A"), _mk("PARCEL 2: B")]
+    assert resolve_parse_text(full, sections, 0) == full
+
+
+def test_resolve_returns_selected_section():
+    full = "PARCEL 1: A; PARCEL 2: B"
+    sections = [_mk("PARCEL 1: A"), _mk("PARCEL 2: B")]
+    assert resolve_parse_text(full, sections, 1) == "PARCEL 1: A"
+    assert resolve_parse_text(full, sections, 2) == "PARCEL 2: B"
+
+
+def test_resolve_falls_back_to_full_on_stale_index():
+    """An index past the section list (stale selection) → full text."""
+    full = "PARCEL 1: A"
+    sections = [_mk("PARCEL 1: A")]
+    assert resolve_parse_text(full, sections, 5) == full
+
+
+def test_resolve_full_text_when_no_sections():
+    full = "THENCE NORTH 100 FEET;"
+    assert resolve_parse_text(full, [], 0) == full
+    assert resolve_parse_text(full, [], 1) == full
