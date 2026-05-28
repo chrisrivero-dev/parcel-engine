@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QGraphicsView,
     QHeaderView,
     QHBoxLayout,
+    QGroupBox,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -477,6 +478,7 @@ class ParcelDesktopApp(QMainWindow):
         cogo_layout.addWidget(table_label)
 
         self.course_table = QTableWidget(0, 6)
+        self.course_table.setMinimumHeight(260)
         self.course_table.setHorizontalHeaderLabels(
             ["ID", "Type", "Direction", "Distance", "Radius", "Delta"]
         )
@@ -512,16 +514,15 @@ class ParcelDesktopApp(QMainWindow):
         output_splitter.addWidget(cogo_section)
 
         # ── Section 2: Parse Summary ────────────────────────────────────
-        summary_section = QWidget()
-        summary_section_layout = QVBoxLayout(summary_section)
-        summary_section_layout.setContentsMargins(4, 4, 4, 4)
+        self.summary_group = QGroupBox("Parse Summary")
+        self.summary_group.setCheckable(True)
+        self.summary_group.setChecked(False)
 
-        summary_label = QLabel("Parse Summary")
-        summary_label.setStyleSheet("font-size: 16px; font-weight: 600;")
-        summary_section_layout.addWidget(summary_label)
+        summary_group_layout = QVBoxLayout(self.summary_group)
+        summary_group_layout.setContentsMargins(6, 4, 6, 4)
 
-        summary_panel = QWidget()
-        summary_layout = QFormLayout(summary_panel)
+        self._summary_body = QWidget()
+        summary_layout = QFormLayout(self._summary_body)
         self.summary_boundary_count = QLabel("0")
         self.summary_ties_count = QLabel("0")
         self.summary_errors_count = QLabel("0")
@@ -530,10 +531,12 @@ class ParcelDesktopApp(QMainWindow):
         summary_layout.addRow("Connection / Reference Ties:", self.summary_ties_count)
         summary_layout.addRow("Parse Errors:", self.summary_errors_count)
         summary_layout.addRow("Closure Misclose:", self.summary_closure)
-        summary_section_layout.addWidget(summary_panel)
-        summary_section_layout.addStretch(1)
 
-        output_splitter.addWidget(summary_section)
+        summary_group_layout.addWidget(self._summary_body)
+        self._summary_body.setVisible(False)
+        self.summary_group.toggled.connect(self._summary_body.setVisible)
+
+        output_splitter.addWidget(self.summary_group)
 
         # ── Section 3: Ignored / Unparsed review ───────────────────────
         ignored_section = QWidget()
@@ -597,12 +600,13 @@ class ParcelDesktopApp(QMainWindow):
 
         output_splitter.addWidget(preview_section)
 
-        # COGO ~40 % | summary ~10 % | ignored ~15 % | preview+validation ~35 %
-        output_splitter.setSizes([300, 90, 110, 560])
-        output_splitter.setStretchFactor(0, 3)
+        # COGO and Parcel Preview are the primary review areas.
+        # Parse Summary starts collapsed; Ignored / Unparsed stays compact.
+        output_splitter.setSizes([460, 40, 100, 500])
+        output_splitter.setStretchFactor(0, 5)
         output_splitter.setStretchFactor(1, 0)
         output_splitter.setStretchFactor(2, 1)
-        output_splitter.setStretchFactor(3, 6)
+        output_splitter.setStretchFactor(3, 5)
 
         pane_layout.addWidget(output_splitter)
 
