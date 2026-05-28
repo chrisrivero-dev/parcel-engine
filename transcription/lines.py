@@ -16,29 +16,57 @@ from models.schema import (
 # OCR / punctuation normalisation for DMS bearings
 # ---------------------------------------------------------------------------
 #
-# Three independent substitutions applied in order.  Each is a no-op on clean
-# text so normalised == original for well-formed input.
+# Each substitution is idempotent on clean text so normalised == original for
+# well-formed input.  These run only as a fallback after the primary parser
+# regexes have already failed.
 #
 # 1. Stray apostrophe before the degree digits: "South '50°…" → "South 50°…"
 _STRAY_APOSTROPHE_RE = re.compile(r"(?<!\d)'(?=\d{1,3}°)")
 
-# 2. Second °-symbol used as minutes separator: 50°00°00" → 50°00'00"
-_DOUBLE_DEGREE_RE = re.compile(r"(\d{1,3}°\d{1,2})°")
+# 2. OCR replaced the degree mark ° with a double-quote.  Only treat the
+#    quote as a degree marker when an obvious DMS structure follows (digits
+#    plus another marker).  A lookbehind guards against rewriting a real
+#    seconds-mark by requiring the digits aren't preceded by ° or ' .
+_DEGREE_QUOTE_FIX_RE = re.compile(
+    r"(?<![\d°'])(\d{1,3})\"(?=\s*\d{1,2}\s*[°'\"!)¢*%])"
+)
 
-# 3. First "-symbol used as minutes marker when no ' precedes it: 31°11" → 31°11'
-#    Runs after step 2, so a genuine seconds " is never in this position.
-_QUOTE_AS_MINUTES_RE = re.compile(r'(\d{1,3}°\d{1,2})"')
+# 3. Second °-symbol used as minutes separator: 50°00°00" → 50°00'00"
+_DOUBLE_DEGREE_RE = re.compile(r"(\d{1,3}°\s*\d{1,2})\s*°")
+
+# 4. First "-symbol used as minutes marker when no ' precedes it: 31°11" → 31°11'
+_QUOTE_AS_MINUTES_RE = re.compile(r'(\d{1,3}°\s*\d{1,2})\s*"')
+
+# 5. Stray minute marker — OCR glyphs ! ) ¢ * sitting where ' belongs.
+_STRAY_MINUTE_MARKER_RE = re.compile(r"(\d{1,3}°\s*\d{1,2})\s*[!)¢*]")
+
+# 6. Stray seconds marker — % sitting where " belongs, only after a minutes ' .
+_STRAY_SECONDS_MARKER_RE = re.compile(r"(\d{1,3}°\s*\d{1,2}\s*'\s*\d{1,2})\s*%")
+
+# 7. Decimal comma in distance values: "20,00 feet" → "20.00 feet".  Strictly
+#    bounded so a thousands separator (e.g. "1,234 feet") never matches.
+_DISTANCE_DECIMAL_COMMA_RE = re.compile(
+    r"(\d{1,4}),(\d{1,2})(?=\s*(?:feet|foot|ft)\b)",
+    re.IGNORECASE,
+)
 
 
 def _normalize_bearing_punct(text: str) -> str:
-    """Fix common OCR/transcription errors in DMS bearing punctuation only.
+    """Fix common OCR/transcription errors in DMS bearing punctuation.
 
-    Idempotent on clean text.  Does NOT correct direction-word typos such as
-    Fast or Bast — those require a separate OCR-correction pass with warnings.
+    Order matters: degree-quote fix runs before the minute-marker fixes so a
+    misread degree mark is restored before downstream patterns try to match
+    around it.  Idempotent on clean text.  Direction-word typos (Fast, Bast,
+    Eagt, etc.) are deliberately NOT corrected — those require a separate
+    OCR-correction pass with explicit warnings.
     """
     text = _STRAY_APOSTROPHE_RE.sub("", text)
+    text = _DEGREE_QUOTE_FIX_RE.sub(r"\1°", text)
     text = _DOUBLE_DEGREE_RE.sub(r"\1'", text)
     text = _QUOTE_AS_MINUTES_RE.sub(r"\1'", text)
+    text = _STRAY_MINUTE_MARKER_RE.sub(r"\1'", text)
+    text = _STRAY_SECONDS_MARKER_RE.sub(r'\1"', text)
+    text = _DISTANCE_DECIMAL_COMMA_RE.sub(r"\1.\2", text)
     return text
 
 
