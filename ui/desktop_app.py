@@ -47,6 +47,7 @@ from transcription.normalize import normalize
 from transcription.parser_v2 import parse_legal_description
 from transcription.sections import split_legal_text_sections
 from transcription.suggestions import explain_unsuggestable, suggest_resolution
+from geometry.resolution import suggest_geometry_aware
 from ui.section_select import FULL_TEXT_LABEL, resolve_parse_text
 from ui.image_viewer import ReferenceImageViewer
 from ui.manual_courses import build_manual_line
@@ -885,7 +886,14 @@ class ParcelDesktopApp(QMainWindow):
             )
             return
 
-        sug = suggest_resolution(entry)
+        # Prefer a geometry-aware candidate (closure-bracket solve) when the
+        # surrounding known calls allow it; otherwise the helper falls back
+        # to the simple direction+distance suggestion internally.
+        sug = suggest_geometry_aware(
+            entry,
+            calls=getattr(self, "calls", []) or [],
+            ignored_chunks=self._ignored_chunks,
+        )
         if sug is None:
             QMessageBox.information(
                 self,
@@ -895,12 +903,22 @@ class ParcelDesktopApp(QMainWindow):
             return
 
         bearing_text = sug.bearing_text()
-        distance_text = f"{sug.distance:.2f} ft"
+        distance_text = (
+            f"{sug.distance:.2f} ft" if sug.distance is not None else "(unknown)"
+        )
+        method_label = {
+            "closure_bracket": "Closure bracket (geometry-aware)",
+            "direction_distance": "Direction + distance (text)",
+        }.get(sug.method, sug.method)
+        residual_text = (
+            f"\nFit residual: {sug.residual}°" if sug.residual is not None else ""
+        )
         body = (
             f"Original: {sug.original_text}\n\n"
+            f"Method: {method_label}\n"
             f"Suggested bearing: {bearing_text}\n"
             f"Suggested distance: {distance_text}\n"
-            f"Confidence: {sug.confidence}\n\n"
+            f"Confidence: {sug.confidence}{residual_text}\n\n"
             f"Reason: {sug.reason}\n\n"
             "Apply this suggestion as a new editable COGO row? "
             "The drawing will not update until you click Build Parcel."
