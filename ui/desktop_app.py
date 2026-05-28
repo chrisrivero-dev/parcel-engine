@@ -41,6 +41,7 @@ except Exception:
 from domain.project import ParcelProject
 from exporters.dxf import export_dxf
 from geometry.builder import build_geometry
+from models.schema import CurveCall, LineCall
 from transcription.normalize import normalize
 from transcription.parser_v2 import parse_legal_description
 from transcription.sections import split_legal_text_sections
@@ -72,6 +73,8 @@ class ParcelCanvas(QGraphicsView):
 
         self._transformed_points: List[QPointF] = []
         self._segments: List[Tuple[Point, Point, str]] = []
+        self._segment_items: list = []  # QGraphicsLineItem per drawn segment
+        self._highlighted: list = []
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._draw_next_segment)
         self._draw_index = 0
@@ -81,6 +84,8 @@ class ParcelCanvas(QGraphicsView):
         self._scene.clear()
         self._transformed_points = []
         self._segments = []
+        self._segment_items = []
+        self._highlighted = []
         self._draw_index = 0
 
     def _transform_points(self, points: List[Point]) -> List[QPointF]:
@@ -176,7 +181,8 @@ class ParcelCanvas(QGraphicsView):
 
         line_pen = QPen(QColor("#1f2937"))
         line_pen.setWidth(2)
-        self._scene.addLine(p1.x(), p1.y(), p2.x(), p2.y(), line_pen)
+        line_item = self._scene.addLine(p1.x(), p1.y(), p2.x(), p2.y(), line_pen)
+        self._segment_items.append(line_item)
 
         vertex_pen = QPen(QColor("#2563eb"))
         vertex_pen.setWidth(1)
@@ -191,6 +197,27 @@ class ParcelCanvas(QGraphicsView):
         label.setPos(mid_x + 6, mid_y + 6)
 
         self._draw_index += 1
+
+    def highlight_segments(self, indices) -> None:
+        """Restore prior highlight, then thicken/recolor the given segments.
+
+        ``indices`` is any iterable of segment positions (0-based) into the
+        already-drawn line items.  Out-of-range indices are skipped safely.
+        Pass an empty iterable to clear the current highlight.
+        """
+        default_pen = QPen(QColor("#1f2937"))
+        default_pen.setWidth(2)
+        for i in self._highlighted:
+            if 0 <= i < len(self._segment_items):
+                self._segment_items[i].setPen(default_pen)
+        self._highlighted = []
+
+        highlight_pen = QPen(QColor("#dc2626"))
+        highlight_pen.setWidth(5)
+        for i in indices:
+            if 0 <= i < len(self._segment_items):
+                self._segment_items[i].setPen(highlight_pen)
+                self._highlighted.append(i)
 
     def zoom_to_fit(self) -> None:
         rect = self._scene.itemsBoundingRect()
@@ -742,8 +769,69 @@ class ParcelDesktopApp(QMainWindow):
         rows = sorted({i.row() for i in sel.selectedIndexes()})
         if not rows or rows[0] >= len(self.calls):
             return
-        span = getattr(self.calls[rows[0]], "source_span", None)
+        row = rows[0]
+        span = getattr(self.calls[row], "source_span", None)
         self._highlight_source_span(span)
+
+        seg_range = self._segment_range_for_row(row)
+        if seg_range is None:
+            self.canvas.highlight_segments([])
+        else:
+            start, end = seg_range
+            self.canvas.highlight_segments(range(start, end))
+
+    def _segment_range_for_row(self, row: int) -> Tuple[int, int] | None:
+        """Map a COGO row to the (start, end) segment range in the canvas.
+
+        Walks ``self.calls`` in order and accumulates vertex indices: a
+        LineCall contributes one segment; a CurveCall contributes one polyline
+        whose end vertex is matched against ``self.result['curves'][*]
+        ['end_point']``.  Returns ``None`` when no segments exist for the row
+        (e.g. a skipped curve) or when there is no built geometry.
+        """
+        if not self.result or row < 0 or row >= len(self.calls):
+            return None
+        points = self.result.get("points", [])
+        if len(points) < 2:
+            return None
+        curves_by_id = {
+            c.get("call_id"): c for c in self.result.get("curves", []) if c.get("call_id")
+        }
+
+        cursor = 0
+        for i, call in enumerate(self.calls):
+            if isinstance(call, LineCall):
+                if cursor + 1 >= len(points):
+                    return None
+                start, end = cursor, cursor + 1
+                cursor = end
+            elif isinstance(call, CurveCall):
+                meta = curves_by_id.get(call.id)
+                if meta is None:
+                    if i == row:
+                        return None
+                    continue
+                end_pt = meta.get("end_point")
+                end_idx = None
+                for j in range(cursor + 1, len(points)):
+                    if (
+                        abs(points[j][0] - end_pt[0]) < 1e-6
+                        and abs(points[j][1] - end_pt[1]) < 1e-6
+                    ):
+                        end_idx = j
+                        break
+                if end_idx is None:
+                    if i == row:
+                        return None
+                    continue
+                start, end = cursor, end_idx
+                cursor = end_idx
+            else:
+                continue
+
+            if i == row:
+                return (start, end)
+        return None
 
     def _on_ignored_row_selected(self) -> None:
         sel = self.ignored_table.selectionModel()
