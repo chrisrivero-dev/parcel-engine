@@ -46,6 +46,7 @@ from models.schema import CurveCall, LineCall
 from transcription.normalize import normalize
 from transcription.parser_v2 import parse_legal_description
 from transcription.sections import split_legal_text_sections
+from transcription.suggestions import explain_unsuggestable, suggest_resolution
 from ui.section_select import FULL_TEXT_LABEL, resolve_parse_text
 from ui.image_viewer import ReferenceImageViewer
 from ui.manual_courses import build_manual_line
@@ -566,6 +567,14 @@ class ParcelDesktopApp(QMainWindow):
         self.ignored_table.itemSelectionChanged.connect(self._on_ignored_row_selected)
         ignored_layout.addWidget(self.ignored_table, stretch=1)
 
+        # Suggest Resolution button — only meaningful for Unresolved
+        # Direction-Only Call rows.  Applying a suggestion appends an
+        # editable row to the COGO table; the preview is not redrawn
+        # until the technician clicks Build Parcel.
+        self.suggest_btn = QPushButton("Suggest Resolution")
+        self.suggest_btn.clicked.connect(self._suggest_resolution_for_selected)
+        ignored_layout.addWidget(self.suggest_btn)
+
         output_splitter.addWidget(ignored_section)
 
         # ── Section 4: Parcel Preview + Validation ─────────────────────
@@ -846,6 +855,88 @@ class ParcelDesktopApp(QMainWindow):
             return
         span = self._ignored_chunks[rows[0]].get("source_span")
         self._highlight_source_span(span)
+
+    def _suggest_resolution_for_selected(self) -> None:
+        """Suggest a COGO resolution for the selected Ignored row.
+
+        Only direction-only unresolved entries with a recognized direction
+        word and a numeric distance produce a suggestion.  The technician
+        confirms via dialog before a new row is appended to the COGO
+        grid; the preview is not redrawn until they click Build Parcel.
+        """
+        sel = self.ignored_table.selectionModel()
+        if sel is None:
+            return
+        rows = sorted({i.row() for i in sel.selectedIndexes()})
+        if not rows or rows[0] >= len(self._ignored_chunks):
+            QMessageBox.information(
+                self,
+                "Suggest Resolution",
+                "Select an Ignored / Unparsed row first.",
+            )
+            return
+        entry = self._ignored_chunks[rows[0]]
+        if entry.get("type") != "Unresolved Direction-Only Call":
+            QMessageBox.information(
+                self,
+                "Suggest Resolution",
+                "Suggestions are only available for "
+                "Unresolved Direction-Only Call entries.",
+            )
+            return
+
+        sug = suggest_resolution(entry)
+        if sug is None:
+            QMessageBox.information(
+                self,
+                "Suggest Resolution",
+                explain_unsuggestable(entry),
+            )
+            return
+
+        bearing_text = sug.bearing_text()
+        distance_text = f"{sug.distance:.2f} ft"
+        body = (
+            f"Original: {sug.original_text}\n\n"
+            f"Suggested bearing: {bearing_text}\n"
+            f"Suggested distance: {distance_text}\n"
+            f"Confidence: {sug.confidence}\n\n"
+            f"Reason: {sug.reason}\n\n"
+            "Apply this suggestion as a new editable COGO row? "
+            "The drawing will not update until you click Build Parcel."
+        )
+        choice = QMessageBox.question(
+            self,
+            "Suggested Resolution",
+            body,
+            QMessageBox.Apply | QMessageBox.Cancel,
+            QMessageBox.Cancel,
+        )
+        if choice != QMessageBox.Apply:
+            return
+
+        self._append_suggested_row(sug, bearing_text, distance_text)
+
+    def _append_suggested_row(self, sug, bearing_text: str, distance_text: str) -> None:
+        """Append a Line row populated from a suggestion to the COGO grid."""
+        row = self.course_table.rowCount()
+        self.course_table.insertRow(row)
+        values = [
+            f"L{row + 1}",
+            "Line",
+            bearing_text,
+            f"{sug.distance:.2f}",
+            "",
+            "",
+        ]
+        for col, val in enumerate(values):
+            self.course_table.setItem(row, col, QTableWidgetItem(val))
+        self._renumber_course_ids()
+        self._update_summary()
+        item = self.course_table.item(row, 2)
+        if item is not None:
+            self.course_table.scrollToItem(item)
+            self.course_table.setCurrentItem(item)
 
     def add_manual_row(self) -> None:
         row = self.course_table.rowCount()
