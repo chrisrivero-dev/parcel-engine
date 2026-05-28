@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Dict, List, Tuple
 
 from models.schema import CurveCall, LineCall
@@ -12,6 +13,25 @@ from transcription.classify import (
     classify,
 )
 from transcription.normalize import normalize
+
+# Direction-only clause: THENCE + a cardinal/ordinal direction word but no
+# numeric DMS bearing.  Matches the longest direction token first so
+# "NORTHEASTERLY" beats "NORTH".
+_DIRECTION_ONLY_RE = re.compile(
+    r"\bTHENCE\s+"
+    r"(?P<dir>"
+    r"NORTH(?:EAST(?:ERLY)?|WEST(?:ERLY)?|ERLY)?"
+    r"|SOUTH(?:EAST(?:ERLY)?|WEST(?:ERLY)?|ERLY)?"
+    r"|EAST(?:ERLY)?"
+    r"|WEST(?:ERLY)?"
+    r")\b",
+    re.IGNORECASE,
+)
+
+_DIRECTION_DIST_RE = re.compile(
+    r"(\d+(?:\.\d+)?)\s*(?:feet|foot|ft)\b",
+    re.IGNORECASE,
+)
 
 _BOILERPLATE_KEYWORDS = (
     "COMMENCING",
@@ -99,7 +119,17 @@ def parse_legal_description(
             tie_idx += 1
         elif chunk.kind == KIND_NOTE:
             upper = chunk.raw.upper()
-            if any(k in upper for k in _BOILERPLATE_KEYWORDS):
+            dir_match = _DIRECTION_ONLY_RE.search(chunk.raw)
+            if dir_match:
+                dist_match = _DIRECTION_DIST_RE.search(chunk.raw)
+                ignored_chunks.append({
+                    "type": "Unresolved Direction-Only Call",
+                    "text": chunk.raw,
+                    "direction": dir_match.group("dir").upper(),
+                    "distance": float(dist_match.group(1)) if dist_match else None,
+                    "source_span": chunk.source_span,
+                })
+            elif any(k in upper for k in _BOILERPLATE_KEYWORDS):
                 ignored_chunks.append({"type": "Boilerplate", "text": chunk.raw, "source_span": chunk.source_span})
             elif any(k in upper for k in _REFERENCE_KEYWORDS):
                 ignored_chunks.append({"type": "Reference / Context", "text": chunk.raw, "source_span": chunk.source_span})
