@@ -270,15 +270,59 @@ def _try_closure_bracket(
     bearing_disp = (
         f"{ns} {deg}°{minutes:02d}'{int(seconds):02d}\" {ew}"
     )
-    reason = (
-        f"Solved from closure bracket: {len(before)} known call(s) before "
-        f"and {len(after)} after, assuming the parcel closes and any sibling "
-        f"direction-only calls follow their stated cardinal directions. "
-        f"Solved bearing {bearing_disp}, distance {dist:.2f} ft "
-        f"{fit} the stated direction {direction!r} "
-        f"(residual {residual}° from due {direction.rstrip('LY').rstrip('ER') or direction}). "
-        f"Technician must confirm before drawing."
-    )
+
+    # Identify the canonical "paired bracket" shape explicitly so the
+    # technician sees *which* sibling and closing call were used to solve
+    # this leg.  The shape: one resolved before, one distance-bearing
+    # sibling unresolved (e.g. NORTHERLY 52 FEET), and at least one
+    # resolved after (typically the back-to-POB call).
+    sibling_unresolved = [
+        ic for ic in unresolved if _span_start(ic) != target_start
+    ]
+    closing_call = after[-1]
+    is_back_to_pob = "POINT OF BEGINNING" in (
+        getattr(closing_call.source_span, "text", "") or ""
+    ).upper()
+    if (
+        len(before) >= 1
+        and len(after) >= 1
+        and len(sibling_unresolved) == 1
+        and _effective_distance(sibling_unresolved[0]) is not None
+    ):
+        method = "paired_bracket"
+        sib = sibling_unresolved[0]
+        sib_dir = (sib.get("direction") or "").upper()
+        sib_dist = _effective_distance(sib)
+        closing_desc = (
+            "the closing call back to the point of beginning"
+            if is_back_to_pob else "the closing known call"
+        )
+        reason = (
+            f"Paired-bracket solve. The unresolved call sits between known "
+            f"{before[-1].id} (bearing {before[-1].bearing.raw_text}, "
+            f"{before[-1].distance.value:g} ft) and {closing_desc} "
+            f"{closing_call.id} (bearing {closing_call.bearing.raw_text}, "
+            f"{closing_call.distance.value:g} ft). Sibling unresolved call "
+            f"{sib_dir} {sib_dist:g} ft was taken at its stated cardinal "
+            f"direction. Assuming the parcel closes, the remaining gap solves "
+            f"to bearing {bearing_disp}, distance {dist:.2f} ft, "
+            f"{fit} the stated direction {direction!r} "
+            f"(residual {residual}° from due "
+            f"{direction.rstrip('LY').rstrip('ER') or direction}). "
+            f"Technician must confirm before drawing."
+        )
+    else:
+        method = "closure_bracket"
+        reason = (
+            f"Solved from closure bracket: {len(before)} known call(s) before "
+            f"and {len(after)} after, assuming the parcel closes and any sibling "
+            f"direction-only calls follow their stated cardinal directions. "
+            f"Solved bearing {bearing_disp}, distance {dist:.2f} ft "
+            f"{fit} the stated direction {direction!r} "
+            f"(residual {residual}° from due "
+            f"{direction.rstrip('LY').rstrip('ER') or direction}). "
+            f"Technician must confirm before drawing."
+        )
 
     return ResolutionCandidate(
         quadrant_ns=ns,
@@ -289,7 +333,7 @@ def _try_closure_bracket(
         distance=round(dist, 2),
         confidence=confidence,
         reason=reason,
-        method="closure_bracket",
+        method=method,
         residual=residual,
         original_text=entry.get("text") or "",
         direction=direction,

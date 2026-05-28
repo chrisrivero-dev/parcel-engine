@@ -46,7 +46,10 @@ def _find(ignored, direction):
 # ---------------------------------------------------------------------------
 
 def test_closure_bracket_solves_missing_west_side_of_rectangle():
-    """E 100, S 50, WESTERLY (?), N 50 → WESTERLY solved to due-west 100 ft."""
+    """E 100, S 50, WESTERLY (?), N 50 → WESTERLY solved to due-west 100 ft.
+
+    No sibling unresolved → method label is the generic closure_bracket.
+    """
     text = (
         "THENCE NORTH 90°00'00\" EAST 100 FEET; "
         "THENCE SOUTH 0°00'00\" EAST 50 FEET; "
@@ -69,21 +72,42 @@ def test_closure_bracket_solves_missing_west_side_of_rectangle():
 # Lot 11 — the motivating real example
 # ---------------------------------------------------------------------------
 
-def test_lot11_westerly_gets_closure_bracket_candidate():
-    """The distance-less WESTERLY call is solved from the closure bracket."""
+def test_lot11_westerly_gets_paired_bracket_candidate():
+    """The distance-less WESTERLY call is solved from the paired bracket.
+
+    Pattern: known L1 before + sibling unresolved NORTHERLY 52' (with
+    distance) + closing known L2 back to POB.  Method label must be the
+    explicit ``paired_bracket`` form so the technician sees which sibling
+    and closing call were used.
+    """
     calls, _, _, ignored = parse_legal_description(LOT_11)
     entry = _find(ignored, "WESTERLY")
 
     cand = suggest_geometry_aware(entry, calls=calls, ignored_chunks=ignored)
     assert cand is not None
-    # Before: simple mapping had no distance → no suggestion at all.
-    # After: a concrete solved bracket candidate with a distance.
-    assert cand.method == "closure_bracket"
-    assert cand.distance is not None and cand.distance > 100.0
+    assert cand.method == "paired_bracket"
+    # The solved distance is the bracket gap, ~119.9 ft — NOT the offset 52'.
+    assert cand.distance == pytest.approx(119.9, abs=0.5)
+    assert cand.distance > 100.0
     # Predominantly westerly, consistent with the stated direction word.
     assert cand.quadrant_ew == "W"
-    assert cand.residual is not None
-    assert "closure bracket" in cand.reason.lower()
+    assert cand.residual is not None and cand.residual < 10.0
+    assert cand.confidence == "medium"
+    # Reason must explicitly mention the NORTHERLY sibling and the closing
+    # back-to-POB call so the technician understands the inference chain.
+    lower = cand.reason.lower()
+    assert "northerly" in lower
+    assert "point of beginning" in lower
+
+
+def test_lot11_westerly_distance_not_taken_from_offset_phrase():
+    """The 52' in 'DISTANT SOUTHERLY 52 FEET' must not become the leg length."""
+    calls, _, _, ignored = parse_legal_description(LOT_11)
+    entry = _find(ignored, "WESTERLY")
+    cand = suggest_geometry_aware(entry, calls=calls, ignored_chunks=ignored)
+    assert cand is not None
+    # 52 ft would be the wrong (offset-tie) value; solved value must differ.
+    assert abs(cand.distance - 52.0) > 10.0
 
 
 def test_lot11_northerly_falls_back_to_direction_distance():

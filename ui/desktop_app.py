@@ -907,6 +907,7 @@ class ParcelDesktopApp(QMainWindow):
             f"{sug.distance:.2f} ft" if sug.distance is not None else "(unknown)"
         )
         method_label = {
+            "paired_bracket": "Paired bracket (geometry-aware)",
             "closure_bracket": "Closure bracket (geometry-aware)",
             "direction_distance": "Direction + distance (text)",
         }.get(sug.method, sug.method)
