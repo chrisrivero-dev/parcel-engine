@@ -237,6 +237,7 @@ class ParcelDesktopApp(QMainWindow):
         self.resize(1500, 900)
 
         self.calls = []
+        self._parsed_calls: list = []  # original parsed calls; always carry source_span
         self.result = None
         self._last_errors_count = 0
         self._last_ties_count = 0
@@ -703,6 +704,7 @@ class ParcelDesktopApp(QMainWindow):
 
         calls, reference_ties, errors, ignored_chunks = parse_legal_description(text)
         self.calls = calls
+        self._parsed_calls = calls  # preserve source_span for geometry-aware suggestions
         self._last_errors_count = len(errors)
         self._last_ties_count = len(reference_ties)
         self._ignored_chunks = ignored_chunks
@@ -886,12 +888,12 @@ class ParcelDesktopApp(QMainWindow):
             )
             return
 
-        # Prefer a geometry-aware candidate (closure-bracket solve) when the
-        # surrounding known calls allow it; otherwise the helper falls back
-        # to the simple direction+distance suggestion internally.
+        # Use the originally-parsed calls (which carry source_span), not
+        # self.calls which _build_result replaces with source-span-less
+        # table calls after Build Parcel runs.
         sug = suggest_geometry_aware(
             entry,
-            calls=getattr(self, "calls", []) or [],
+            calls=self._parsed_calls,
             ignored_chunks=self._ignored_chunks,
         )
         if sug is None:
@@ -1019,6 +1021,7 @@ class ParcelDesktopApp(QMainWindow):
     def clear_rows(self) -> None:
         self.course_table.setRowCount(0)
         self.calls = []
+        self._parsed_calls = []
         self.result = None
         self.summary_closure.setText("-")
         self._update_summary()
