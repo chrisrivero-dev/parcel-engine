@@ -48,6 +48,7 @@ from transcription.parser_v2 import parse_legal_description
 from transcription.sections import split_legal_text_sections
 from transcription.suggestions import explain_unsuggestable, suggest_resolution
 from geometry.resolution import suggest_geometry_aware
+from ui.audit_trail import RowAudit, RowAuditStore, SOURCE_SUGGESTED
 from ui.section_select import FULL_TEXT_LABEL, resolve_parse_text
 from ui.image_viewer import ReferenceImageViewer
 from ui.manual_courses import build_manual_line
@@ -242,6 +243,7 @@ class ParcelDesktopApp(QMainWindow):
         self._last_errors_count = 0
         self._last_ties_count = 0
         self._ignored_chunks: list = []
+        self._row_audit = RowAuditStore()
         self._detected_sections: list = []
         self._ocr_lines: list = []
         self.project: ParcelProject = ParcelProject()
@@ -480,14 +482,15 @@ class ParcelDesktopApp(QMainWindow):
         table_label.setStyleSheet("font-size: 16px; font-weight: 600;")
         cogo_layout.addWidget(table_label)
 
-        self.course_table = QTableWidget(0, 6)
+        self.course_table = QTableWidget(0, 7)
         self.course_table.setMinimumHeight(260)
         self.course_table.setHorizontalHeaderLabels(
-            ["ID", "Type", "Direction", "Distance", "Radius", "Delta"]
+            ["ID", "Type", "Direction", "Distance", "Radius", "Delta", "Source"]
         )
         self.course_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.course_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.course_table.itemSelectionChanged.connect(self._on_course_row_selected)
+        self.course_table.cellDoubleClicked.connect(self._on_course_cell_double_clicked)
         cogo_layout.addWidget(self.course_table, stretch=1)
 
         row_button_row = QHBoxLayout()
@@ -498,6 +501,10 @@ class ParcelDesktopApp(QMainWindow):
         del_row_btn = QPushButton("Delete Selected Row")
         del_row_btn.clicked.connect(self.delete_selected_row)
         row_button_row.addWidget(del_row_btn)
+        
+        audit_btn = QPushButton("Show Row Audit")
+        audit_btn.clicked.connect(self._show_row_audit)
+        row_button_row.addWidget(audit_btn)
         cogo_layout.addLayout(row_button_row)
 
         move_row_row = QHBoxLayout()
@@ -761,6 +768,12 @@ class ParcelDesktopApp(QMainWindow):
             for col, value in enumerate(values):
                 self.course_table.setItem(row, col, QTableWidgetItem(str(value)))
 
+        for _r in range(self.course_table.rowCount()):
+            self.course_table.setItem(
+                _r, self.course_table.columnCount() - 1,
+                QTableWidgetItem("Legal"),
+            )
+        self._row_audit.replace_all_legal(self.course_table.rowCount())
         self._update_summary()
 
         # Replace displayed text with normalized form so span indices align for highlighting.
@@ -952,6 +965,14 @@ class ParcelDesktopApp(QMainWindow):
         ]
         for col, val in enumerate(values):
             self.course_table.setItem(row, col, QTableWidgetItem(val))
+        self.course_table.setItem(
+            row, self.course_table.columnCount() - 1,
+            QTableWidgetItem("Suggested"),
+        )
+        self._row_audit.append(
+            RowAudit.from_suggestion(sug, bearing_text, distance_text)
+        )
+        self._tint_row(row, "#fef3c7")
         self._renumber_course_ids()
         self._update_summary()
         item = self.course_table.item(row, 2)
@@ -971,6 +992,11 @@ class ParcelDesktopApp(QMainWindow):
         item = self.course_table.item(row, 2)
         self.course_table.scrollToItem(item)
         self.course_table.editItem(item)
+        self.course_table.setItem(
+            row, self.course_table.columnCount() - 1,
+            QTableWidgetItem("Manual"),
+        )
+        self._row_audit.append(RowAudit.manual())
 
     def delete_selected_row(self) -> None:
         selection = self.course_table.selectionModel()
@@ -981,6 +1007,7 @@ class ParcelDesktopApp(QMainWindow):
             return
         for row in rows:
             self.course_table.removeRow(row)
+            self._row_audit.remove_at(row)
         self._renumber_course_ids()
         self._update_summary()
 
@@ -998,6 +1025,8 @@ class ParcelDesktopApp(QMainWindow):
             ib = self.course_table.takeItem(b, col)
             self.course_table.setItem(a, col, ib if ib is not None else QTableWidgetItem(""))
             self.course_table.setItem(b, col, ia if ia is not None else QTableWidgetItem(""))
+        self._row_audit.swap(a, b)
+        self._reapply_row_tints()
 
     def move_row_up(self) -> None:
         row = self._selected_course_row()
@@ -1025,10 +1054,12 @@ class ParcelDesktopApp(QMainWindow):
         self.result = None
         self.summary_closure.setText("-")
         self._update_summary()
+        self._row_audit.clear()
 
     def _renumber_course_ids(self) -> None:
         for row in range(self.course_table.rowCount()):
             self.course_table.setItem(row, 0, QTableWidgetItem(f"L{row + 1}"))
+        self._reapply_row_tints()
 
     def _update_summary(self) -> None:
         self.summary_boundary_count.setText(str(self.course_table.rowCount()))
@@ -1316,12 +1347,124 @@ class ParcelDesktopApp(QMainWindow):
         )
 
 
+
+# Runtime attachment for audit handlers. This fixes cases where the direct-apply
+# script inserted audit helper methods outside the ParcelDesktopApp class.
+def _audit_show_row_audit(self):
+    row = self.course_table.currentRow()
+    if row < 0:
+        QMessageBox.information(self, "Row Audit", "Select a COGO row first.")
+        return
+
+    source_col = self.course_table.columnCount() - 1
+    source_item = self.course_table.item(row, source_col)
+    source = source_item.text() if source_item is not None else "Unknown"
+
+    store = getattr(self, "_row_audit_store", None)
+    audit = None
+
+    if store is not None:
+        for getter_name in ("get", "get_audit", "audit_for_row", "get_row_audit"):
+            getter = getattr(store, getter_name, None)
+            if getter is None:
+                continue
+
+            for row_key in (row, row + 1):
+                try:
+                    audit = getter(row_key)
+                except Exception:
+                    audit = None
+
+                if audit is not None:
+                    break
+
+            if audit is not None:
+                break
+
+    if audit is None:
+        QMessageBox.information(
+            self,
+            "Row Audit",
+            f"Row: {row + 1}\nSource: {source}\n\nNo detailed audit metadata found for this row.",
+        )
+        return
+
+    def field(name, default=""):
+        if isinstance(audit, dict):
+            return audit.get(name, default)
+        return getattr(audit, name, default)
+
+    details = [
+        f"Row: {row + 1}",
+        f"Source: {source}",
+        f"Original unresolved text: {field('original_text', field('unresolved_text', ''))}",
+        f"Method: {field('method', '')}",
+        f"Confidence: {field('confidence', '')}",
+        f"Reason: {field('reason', '')}",
+        f"Residual: {field('residual', '')}",
+        f"Suggested bearing: {field('bearing', field('suggested_bearing', ''))}",
+        f"Suggested distance: {field('distance', field('suggested_distance', ''))}",
+    ]
+
+    QMessageBox.information(
+        self,
+        "Row Audit",
+        "\n".join(str(item) for item in details if str(item).strip()),
+    )
+
+
+def _audit_on_course_cell_double_clicked(self, row, col):
+    source_col = self.course_table.columnCount() - 1
+    if col == source_col:
+        self.course_table.selectRow(row)
+        self._show_row_audit()
+
+
+ParcelDesktopApp._show_row_audit = _audit_show_row_audit
+ParcelDesktopApp._on_course_cell_double_clicked = _audit_on_course_cell_double_clicked
+
 def main() -> None:
     app = QApplication(sys.argv)
     window = ParcelDesktopApp()
     window.show()
     sys.exit(app.exec())
 
+
+    # ── Row audit ─────────────────────────────────────────────────────────
+    def _tint_row(self, row, hex_color):
+        bg = QColor(hex_color)
+        for col in range(self.course_table.columnCount()):
+            item = self.course_table.item(row, col)
+            if item is not None:
+                item.setBackground(bg)
+
+    def _reapply_row_tints(self):
+        for row in range(self.course_table.rowCount()):
+            audit = self._row_audit.get(row)
+            if audit.source == SOURCE_SUGGESTED:
+                self._tint_row(row, "#fef3c7")
+            else:
+                for col in range(self.course_table.columnCount()):
+                    item = self.course_table.item(row, col)
+                    if item is not None:
+                        item.setBackground(QColor("white"))
+
+    def _show_row_audit(self):
+        row = self._selected_course_row()
+        if row < 0:
+            QMessageBox.information(
+                self,
+                "Row Audit",
+                "Select a COGO row first to view its audit detail.",
+            )
+            return
+        audit = self._row_audit.get(row)
+        QMessageBox.information(self, f"Row Audit — L{row + 1}", audit.detail_text())
+
+    def _on_course_cell_double_clicked(self, row, col):
+        if col == self.course_table.columnCount() - 1:
+            audit = self._row_audit.get(row)
+            QMessageBox.information(self, f"Row Audit — L{row + 1}", audit.detail_text())
 
 if __name__ == "__main__":
     main()
