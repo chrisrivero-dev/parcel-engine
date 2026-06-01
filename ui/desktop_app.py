@@ -49,6 +49,7 @@ from transcription.sections import split_legal_text_sections
 from transcription.suggestions import explain_unsuggestable, suggest_resolution
 from geometry.resolution import suggest_geometry_aware
 from ui.audit_trail import RowAudit, RowAuditStore, SOURCE_SUGGESTED
+from ui.preview_panel import count_unresolved, format_ignored_title
 from ui.section_select import FULL_TEXT_LABEL, resolve_parse_text
 from ui.image_viewer import ReferenceImageViewer
 from ui.manual_courses import build_manual_line
@@ -67,6 +68,11 @@ Point = Tuple[float, float]
 
 
 class ParcelCanvas(QGraphicsView):
+    LINE_WIDTH = 3
+    HIGHLIGHT_WIDTH = 6
+    LABEL_POINT_SIZE = 12
+    PAD = 70.0
+
     def __init__(self) -> None:
         super().__init__()
         self._scene = QGraphicsScene(self)
@@ -102,7 +108,7 @@ class ParcelCanvas(QGraphicsView):
         width = max(max_x - min_x, 1.0)
         height = max(max_y - min_y, 1.0)
 
-        pad = 60.0
+        pad = self.PAD
         view_w = 1000.0
         view_h = 700.0
 
@@ -184,7 +190,7 @@ class ParcelCanvas(QGraphicsView):
         _, _, label_text = self._segments[i]
 
         line_pen = QPen(QColor("#1f2937"))
-        line_pen.setWidth(2)
+        line_pen.setWidth(self.LINE_WIDTH)
         line_item = self._scene.addLine(p1.x(), p1.y(), p2.x(), p2.y(), line_pen)
         self._segment_items.append(line_item)
 
@@ -198,6 +204,10 @@ class ParcelCanvas(QGraphicsView):
         mid_y = (p1.y() + p2.y()) / 2
         label = self._scene.addSimpleText(label_text)
         label.setBrush(QColor("#b91c1c"))
+        font = label.font()
+        font.setPointSize(self.LABEL_POINT_SIZE)
+        font.setBold(True)
+        label.setFont(font)
         label.setPos(mid_x + 6, mid_y + 6)
 
         self._draw_index += 1
@@ -210,14 +220,14 @@ class ParcelCanvas(QGraphicsView):
         Pass an empty iterable to clear the current highlight.
         """
         default_pen = QPen(QColor("#1f2937"))
-        default_pen.setWidth(2)
+        default_pen.setWidth(self.LINE_WIDTH)
         for i in self._highlighted:
             if 0 <= i < len(self._segment_items):
                 self._segment_items[i].setPen(default_pen)
         self._highlighted = []
 
         highlight_pen = QPen(QColor("#dc2626"))
-        highlight_pen.setWidth(5)
+        highlight_pen.setWidth(self.HIGHLIGHT_WIDTH)
         for i in indices:
             if 0 <= i < len(self._segment_items):
                 self._segment_items[i].setPen(highlight_pen)
@@ -230,6 +240,20 @@ class ParcelCanvas(QGraphicsView):
             self.fitInView(rect, Qt.KeepAspectRatio)
 
 
+    
+    # ── Preview controls ──────────────────────────────────────────────────
+    def zoom_in(self) -> None:
+        self.scale(1.25, 1.25)
+    
+    def zoom_out(self) -> None:
+        self.scale(0.8, 0.8)
+    
+    def fit_to_view(self) -> None:
+        self.zoom_to_fit()
+    
+    def reset_view(self) -> None:
+        self.resetTransform()
+        self.zoom_to_fit()
 class ParcelDesktopApp(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -548,18 +572,22 @@ class ParcelDesktopApp(QMainWindow):
 
         output_splitter.addWidget(self.summary_group)
 
-        # ── Section 3: Ignored / Unparsed review ───────────────────────
-        ignored_section = QWidget()
-        ignored_layout = QVBoxLayout(ignored_section)
-        ignored_layout.setContentsMargins(4, 4, 4, 4)
+        # ── Section 3: Ignored / Unparsed review (collapsible) ─────────
+        self.ignored_group = QGroupBox(format_ignored_title(0))
+        self.ignored_group.setCheckable(True)
+        self.ignored_group.setChecked(False)
+        self.ignored_group.setStyleSheet("QGroupBox { font-size: 14px; font-weight: 600; }")
 
-        ignored_label = QLabel("Ignored / Unparsed Text")
-        ignored_label.setStyleSheet("font-size: 16px; font-weight: 600;")
-        ignored_layout.addWidget(ignored_label)
+        ignored_outer = QVBoxLayout(self.ignored_group)
+        ignored_outer.setContentsMargins(6, 4, 6, 4)
+
+        self._ignored_body = QWidget()
+        ignored_layout = QVBoxLayout(self._ignored_body)
+        ignored_layout.setContentsMargins(0, 0, 0, 0)
 
         ignored_note = QLabel(
             "Review skipped text. Correct OCR/source text in the middle pane, "
-            "then click Parse Courses again."
+            "then click Parse Courses again. Double-click a row to see full text."
         )
         ignored_note.setStyleSheet("font-size: 11px; color: #6b7280;")
         ignored_note.setWordWrap(True)
@@ -574,29 +602,44 @@ class ParcelDesktopApp(QMainWindow):
         self.ignored_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.ignored_table.setWordWrap(True)
         self.ignored_table.itemSelectionChanged.connect(self._on_ignored_row_selected)
+        self.ignored_table.cellDoubleClicked.connect(self._on_ignored_cell_double_clicked)
         ignored_layout.addWidget(self.ignored_table, stretch=1)
 
-        # Suggest Resolution button — only meaningful for Unresolved
-        # Direction-Only Call rows.  Applying a suggestion appends an
-        # editable row to the COGO table; the preview is not redrawn
-        # until the technician clicks Build Parcel.
         self.suggest_btn = QPushButton("Suggest Resolution")
         self.suggest_btn.clicked.connect(self._suggest_resolution_for_selected)
         ignored_layout.addWidget(self.suggest_btn)
 
-        output_splitter.addWidget(ignored_section)
+        ignored_outer.addWidget(self._ignored_body)
+        self.ignored_group.toggled.connect(self._ignored_body.setVisible)
+        self._ignored_body.setVisible(False)
 
+        output_splitter.addWidget(self.ignored_group)
         # ── Section 4: Parcel Preview + Validation ─────────────────────
         preview_section = QWidget()
         preview_layout = QVBoxLayout(preview_section)
         preview_layout.setContentsMargins(4, 4, 4, 4)
 
         preview_label = QLabel("Parcel Preview")
-        preview_label.setStyleSheet("font-size: 16px; font-weight: 600;")
+        preview_label.setStyleSheet("font-size: 18px; font-weight: 700;")
         preview_layout.addWidget(preview_label)
 
+        
+        # Preview controls: zoom / fit / reset.
+        preview_controls = QHBoxLayout()
+        zoom_in_btn = QPushButton("Zoom In")
+        zoom_out_btn = QPushButton("Zoom Out")
+        fit_btn = QPushButton("Fit to View")
+        reset_btn = QPushButton("Reset View")
+        for btn in (zoom_in_btn, zoom_out_btn, fit_btn, reset_btn):
+            preview_controls.addWidget(btn)
+        preview_controls.addStretch(1)
+        zoom_in_btn.clicked.connect(lambda: self.canvas.zoom_in())
+        zoom_out_btn.clicked.connect(lambda: self.canvas.zoom_out())
+        fit_btn.clicked.connect(lambda: self.canvas.fit_to_view())
+        reset_btn.clicked.connect(lambda: self.canvas.reset_view())
+        preview_layout.addLayout(preview_controls)
         self.canvas = ParcelCanvas()
-        self.canvas.setMinimumHeight(360)
+        self.canvas.setMinimumHeight(460)
         preview_layout.addWidget(self.canvas, stretch=1)
 
         validation_label = QLabel("Validation")
@@ -620,12 +663,11 @@ class ParcelDesktopApp(QMainWindow):
 
         # COGO and Parcel Preview are the primary review areas.
         # Parse Summary starts collapsed; Ignored / Unparsed stays compact.
-        output_splitter.setSizes([460, 40, 100, 500])
-        output_splitter.setStretchFactor(0, 5)
+        output_splitter.setSizes([300, 40, 40, 760])
+        output_splitter.setStretchFactor(0, 3)
         output_splitter.setStretchFactor(1, 0)
-        output_splitter.setStretchFactor(2, 1)
-        output_splitter.setStretchFactor(3, 5)
-
+        output_splitter.setStretchFactor(2, 0)
+        output_splitter.setStretchFactor(3, 8)
         pane_layout.addWidget(output_splitter)
 
         return pane
@@ -732,6 +774,15 @@ class ParcelDesktopApp(QMainWindow):
             self.ignored_table.setItem(row, 0, type_item)
             self.ignored_table.setItem(row, 1, text_item)
 
+            
+            # Update the collapsible group's title with counts and
+            # auto-expand it only when there is something to review.
+            _total_ignored = len(ignored_chunks)
+            _unresolved = count_unresolved(ignored_chunks)
+            self.ignored_group.setTitle(
+                format_ignored_title(_total_ignored, _unresolved)
+            )
+            self.ignored_group.setChecked(_total_ignored > 0)
         self.course_table.setRowCount(len(calls))
 
         for row, call in enumerate(calls):
@@ -863,6 +914,7 @@ class ParcelDesktopApp(QMainWindow):
         return None
 
     def _on_ignored_row_selected(self) -> None:
+
         sel = self.ignored_table.selectionModel()
         if sel is None:
             return
@@ -871,6 +923,14 @@ class ParcelDesktopApp(QMainWindow):
             return
         span = self._ignored_chunks[rows[0]].get("source_span")
         self._highlight_source_span(span)
+
+    def _on_ignored_cell_double_clicked(self, row, col):
+        if row < 0 or row >= len(self._ignored_chunks):
+            return
+        chunk = self._ignored_chunks[row]
+        kind = chunk.get("type", "Ignored")
+        text = chunk.get("text", "") or "(no text)"
+        QMessageBox.information(self, f"{kind}", text)
 
     def _suggest_resolution_for_selected(self) -> None:
         """Suggest a COGO resolution for the selected Ignored row.
