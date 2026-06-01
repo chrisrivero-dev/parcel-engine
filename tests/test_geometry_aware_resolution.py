@@ -207,3 +207,63 @@ def test_helper_does_not_mutate_inputs():
     snapshot = dict(entry)
     suggest_geometry_aware(entry, calls=calls, ignored_chunks=ignored)
     assert entry == snapshot
+
+
+# ---------------------------------------------------------------------------
+# Regression: source-span-less calls (post-Build-Parcel) must not break solve
+# ---------------------------------------------------------------------------
+
+def test_calls_without_source_span_do_not_produce_bracket_candidate():
+    """Calls built from the COGO table (no source_span) must not fool the
+    bracket solver into fabricating a candidate from mis-ordered spans.
+    The solver should safely return None rather than produce garbage.
+    """
+    from models.schema import (
+        Bearing, BearingFormat, DirectionBasis, Distance, DMS,
+        LineCall, QuadrantBearing,
+    )
+    # Build two LineCall objects as _calls_from_table() / build_manual_line()
+    # would — no source_span set.
+    def _make_line(idx, ns, deg, mn, sc, ew, dist):
+        return LineCall(
+            id=f"L{idx}",
+            raw_text=f"{ns} {deg}°{mn}'{sc}\" {ew}",
+            bearing=Bearing(
+                raw_text=f"{ns} {deg}°{mn}'{sc}\" {ew}",
+                format=BearingFormat.QUADRANT,
+                value=QuadrantBearing(
+                    quadrant_ns=ns,
+                    angle=DMS(deg=deg, minutes=mn, seconds=float(sc)),
+                    quadrant_ew=ew,
+                ),
+                basis=DirectionBasis.TRUE,
+                confidence=1.0,
+            ),
+            distance=Distance(raw_text=str(dist), value=float(dist)),
+            # source_span intentionally absent (None by default)
+        )
+
+    table_calls = [
+        _make_line(1, "S", 0, 24, 19, "W", 60),
+        _make_line(2, "S", 89, 35, 41, "E", 120),
+    ]
+    _, _, _, ignored = parse_legal_description(LOT_11)
+    westerly = _find(ignored, "WESTERLY")
+    # Without source spans the bracket solver cannot order calls vs the
+    # unresolved entry; it must return None, not a random result.
+    cand = suggest_geometry_aware(westerly, calls=table_calls, ignored_chunks=ignored)
+    assert cand is None
+
+
+def test_parsed_calls_with_source_span_still_solve_after_build_parcel_simulation():
+    """Storing _parsed_calls separately from self.calls means the suggestion
+    helper always receives span-bearing calls even after Build Parcel rewrites
+    self.calls with source-span-less table calls.
+    """
+    calls, _, _, ignored = parse_legal_description(LOT_11)
+    # parsed_calls has source_span; this is what _parsed_calls holds.
+    westerly = _find(ignored, "WESTERLY")
+    cand = suggest_geometry_aware(westerly, calls=calls, ignored_chunks=ignored)
+    assert cand is not None
+    assert cand.method == "paired_bracket"
+    assert cand.distance == pytest.approx(119.9, abs=0.5)
