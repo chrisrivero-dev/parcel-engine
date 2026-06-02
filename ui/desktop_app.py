@@ -48,6 +48,8 @@ from transcription.parser_v2 import parse_legal_description
 from transcription.sections import split_legal_text_sections
 from transcription.suggestions import explain_unsuggestable, suggest_resolution
 from geometry.resolution import suggest_geometry_aware
+from ui.audit_trail import RowAudit, RowAuditStore, SOURCE_SUGGESTED
+from ui.preview_panel import count_unresolved, format_ignored_title
 from ui.section_select import FULL_TEXT_LABEL, resolve_parse_text
 from ui.image_viewer import ReferenceImageViewer
 from ui.manual_courses import build_manual_line
@@ -66,6 +68,10 @@ Point = Tuple[float, float]
 
 
 class ParcelCanvas(QGraphicsView):
+    LINE_WIDTH = 3
+    HIGHLIGHT_WIDTH = 6
+    LABEL_POINT_SIZE = 12
+    PAD = 40.0
     def __init__(self) -> None:
         super().__init__()
         self._scene = QGraphicsScene(self)
@@ -78,6 +84,9 @@ class ParcelCanvas(QGraphicsView):
         self._segments: List[Tuple[Point, Point, str]] = []
         self._segment_items: list = []  # QGraphicsLineItem per drawn segment
         self._highlighted: list = []
+        # When the technician manually zooms we stop auto-fitting on
+        # resize so their chosen zoom is preserved; Fit/Reset re-enable it.
+        self._user_zoomed = False
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._draw_next_segment)
         self._draw_index = 0
@@ -101,7 +110,7 @@ class ParcelCanvas(QGraphicsView):
         width = max(max_x - min_x, 1.0)
         height = max(max_y - min_y, 1.0)
 
-        pad = 60.0
+        pad = self.PAD
         view_w = 1000.0
         view_h = 700.0
 
@@ -146,6 +155,7 @@ class ParcelCanvas(QGraphicsView):
     def prepare_drawing(self, points: List[Point], labels: List[str]) -> None:
         self.clear_canvas()
 
+        self._user_zoomed = False  # fresh drawing -> auto-fit until user zooms
         if len(points) < 2:
             return
 
@@ -183,7 +193,7 @@ class ParcelCanvas(QGraphicsView):
         _, _, label_text = self._segments[i]
 
         line_pen = QPen(QColor("#1f2937"))
-        line_pen.setWidth(2)
+        line_pen.setWidth(self.LINE_WIDTH)
         line_item = self._scene.addLine(p1.x(), p1.y(), p2.x(), p2.y(), line_pen)
         self._segment_items.append(line_item)
 
@@ -197,6 +207,10 @@ class ParcelCanvas(QGraphicsView):
         mid_y = (p1.y() + p2.y()) / 2
         label = self._scene.addSimpleText(label_text)
         label.setBrush(QColor("#b91c1c"))
+        font = label.font()
+        font.setPointSize(self.LABEL_POINT_SIZE)
+        font.setBold(True)
+        label.setFont(font)
         label.setPos(mid_x + 6, mid_y + 6)
 
         self._draw_index += 1
@@ -209,14 +223,14 @@ class ParcelCanvas(QGraphicsView):
         Pass an empty iterable to clear the current highlight.
         """
         default_pen = QPen(QColor("#1f2937"))
-        default_pen.setWidth(2)
+        default_pen.setWidth(self.LINE_WIDTH)
         for i in self._highlighted:
             if 0 <= i < len(self._segment_items):
                 self._segment_items[i].setPen(default_pen)
         self._highlighted = []
 
         highlight_pen = QPen(QColor("#dc2626"))
-        highlight_pen.setWidth(5)
+        highlight_pen.setWidth(self.HIGHLIGHT_WIDTH)
         for i in indices:
             if 0 <= i < len(self._segment_items):
                 self._segment_items[i].setPen(highlight_pen)
@@ -225,10 +239,37 @@ class ParcelCanvas(QGraphicsView):
     def zoom_to_fit(self) -> None:
         rect = self._scene.itemsBoundingRect()
         if rect.isValid():
-            rect = rect.adjusted(-30, -30, 30, 30)
+            margin = max(rect.width(), rect.height()) * 0.04 + 10.0
+            rect = rect.adjusted(-margin, -margin, margin, margin)
             self.fitInView(rect, Qt.KeepAspectRatio)
 
 
+    
+    # ── Preview controls ──────────────────────────────────────────────────
+    def resizeEvent(self, event) -> None:
+        # Re-fit on every viewport size change (window show, splitter
+        # drag) so the parcel is never left clipped by a stale
+        # transform.  Skip when the user has manually zoomed.
+        super().resizeEvent(event)
+        if not self._user_zoomed and self._scene.items():
+            self.zoom_to_fit()
+    
+    def zoom_in(self) -> None:
+        self._user_zoomed = True
+        self.scale(1.25, 1.25)
+    
+    def zoom_out(self) -> None:
+        self._user_zoomed = True
+        self.scale(0.8, 0.8)
+    
+    def fit_to_view(self) -> None:
+        self._user_zoomed = False
+        self.zoom_to_fit()
+    
+    def reset_view(self) -> None:
+        self._user_zoomed = False
+        self.resetTransform()
+        self.zoom_to_fit()
 class ParcelDesktopApp(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -242,6 +283,7 @@ class ParcelDesktopApp(QMainWindow):
         self._last_errors_count = 0
         self._last_ties_count = 0
         self._ignored_chunks: list = []
+        self._row_audit = RowAuditStore()
         self._detected_sections: list = []
         self._ocr_lines: list = []
         self.project: ParcelProject = ParcelProject()
@@ -480,14 +522,15 @@ class ParcelDesktopApp(QMainWindow):
         table_label.setStyleSheet("font-size: 16px; font-weight: 600;")
         cogo_layout.addWidget(table_label)
 
-        self.course_table = QTableWidget(0, 6)
+        self.course_table = QTableWidget(0, 7)
         self.course_table.setMinimumHeight(260)
         self.course_table.setHorizontalHeaderLabels(
-            ["ID", "Type", "Direction", "Distance", "Radius", "Delta"]
+            ["ID", "Type", "Direction", "Distance", "Radius", "Delta", "Source"]
         )
         self.course_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.course_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.course_table.itemSelectionChanged.connect(self._on_course_row_selected)
+        self.course_table.cellDoubleClicked.connect(self._on_course_cell_double_clicked)
         cogo_layout.addWidget(self.course_table, stretch=1)
 
         row_button_row = QHBoxLayout()
@@ -498,6 +541,10 @@ class ParcelDesktopApp(QMainWindow):
         del_row_btn = QPushButton("Delete Selected Row")
         del_row_btn.clicked.connect(self.delete_selected_row)
         row_button_row.addWidget(del_row_btn)
+        
+        audit_btn = QPushButton("Show Row Audit")
+        audit_btn.clicked.connect(self._show_row_audit)
+        row_button_row.addWidget(audit_btn)
         cogo_layout.addLayout(row_button_row)
 
         move_row_row = QHBoxLayout()
@@ -541,18 +588,22 @@ class ParcelDesktopApp(QMainWindow):
 
         output_splitter.addWidget(self.summary_group)
 
-        # ── Section 3: Ignored / Unparsed review ───────────────────────
-        ignored_section = QWidget()
-        ignored_layout = QVBoxLayout(ignored_section)
-        ignored_layout.setContentsMargins(4, 4, 4, 4)
+        # ── Section 3: Ignored / Unparsed review (collapsible) ─────────
+        self.ignored_group = QGroupBox(format_ignored_title(0))
+        self.ignored_group.setCheckable(True)
+        self.ignored_group.setChecked(False)
+        self.ignored_group.setStyleSheet("QGroupBox { font-size: 14px; font-weight: 600; }")
 
-        ignored_label = QLabel("Ignored / Unparsed Text")
-        ignored_label.setStyleSheet("font-size: 16px; font-weight: 600;")
-        ignored_layout.addWidget(ignored_label)
+        ignored_outer = QVBoxLayout(self.ignored_group)
+        ignored_outer.setContentsMargins(6, 4, 6, 4)
+
+        self._ignored_body = QWidget()
+        ignored_layout = QVBoxLayout(self._ignored_body)
+        ignored_layout.setContentsMargins(0, 0, 0, 0)
 
         ignored_note = QLabel(
             "Review skipped text. Correct OCR/source text in the middle pane, "
-            "then click Parse Courses again."
+            "then click Parse Courses again. Double-click a row to see full text."
         )
         ignored_note.setStyleSheet("font-size: 11px; color: #6b7280;")
         ignored_note.setWordWrap(True)
@@ -567,29 +618,46 @@ class ParcelDesktopApp(QMainWindow):
         self.ignored_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.ignored_table.setWordWrap(True)
         self.ignored_table.itemSelectionChanged.connect(self._on_ignored_row_selected)
+        self.ignored_table.cellDoubleClicked.connect(self._on_ignored_cell_double_clicked)
         ignored_layout.addWidget(self.ignored_table, stretch=1)
 
-        # Suggest Resolution button — only meaningful for Unresolved
-        # Direction-Only Call rows.  Applying a suggestion appends an
-        # editable row to the COGO table; the preview is not redrawn
-        # until the technician clicks Build Parcel.
         self.suggest_btn = QPushButton("Suggest Resolution")
         self.suggest_btn.clicked.connect(self._suggest_resolution_for_selected)
         ignored_layout.addWidget(self.suggest_btn)
 
-        output_splitter.addWidget(ignored_section)
+        ignored_outer.addWidget(self._ignored_body)
+        self.ignored_group.toggled.connect(self._ignored_body.setVisible)
+        self._ignored_body.setVisible(False)
 
+        output_splitter.addWidget(self.ignored_group)
         # ── Section 4: Parcel Preview + Validation ─────────────────────
         preview_section = QWidget()
         preview_layout = QVBoxLayout(preview_section)
         preview_layout.setContentsMargins(4, 4, 4, 4)
 
         preview_label = QLabel("Parcel Preview")
-        preview_label.setStyleSheet("font-size: 16px; font-weight: 600;")
+        preview_label.setStyleSheet("font-size: 18px; font-weight: 700;")
         preview_layout.addWidget(preview_label)
 
+        
+        # Preview controls: zoom / fit / reset.
+        preview_controls = QHBoxLayout()
+        zoom_in_btn = QPushButton("Zoom In")
+        zoom_out_btn = QPushButton("Zoom Out")
+        fit_btn = QPushButton("Fit to View")
+        reset_btn = QPushButton("Reset View")
+        large_btn = QPushButton("Open Large Preview")
+        for btn in (zoom_in_btn, zoom_out_btn, fit_btn, reset_btn, large_btn):
+            preview_controls.addWidget(btn)
+        preview_controls.addStretch(1)
+        zoom_in_btn.clicked.connect(lambda: self.canvas.zoom_in())
+        zoom_out_btn.clicked.connect(lambda: self.canvas.zoom_out())
+        fit_btn.clicked.connect(lambda: self.canvas.fit_to_view())
+        reset_btn.clicked.connect(lambda: self.canvas.reset_view())
+        large_btn.clicked.connect(self.open_large_preview)
+        preview_layout.addLayout(preview_controls)
         self.canvas = ParcelCanvas()
-        self.canvas.setMinimumHeight(360)
+        self.canvas.setMinimumHeight(420)
         preview_layout.addWidget(self.canvas, stretch=1)
 
         validation_label = QLabel("Validation")
@@ -613,12 +681,11 @@ class ParcelDesktopApp(QMainWindow):
 
         # COGO and Parcel Preview are the primary review areas.
         # Parse Summary starts collapsed; Ignored / Unparsed stays compact.
-        output_splitter.setSizes([460, 40, 100, 500])
-        output_splitter.setStretchFactor(0, 5)
+        output_splitter.setSizes([260, 36, 36, 840])
+        output_splitter.setStretchFactor(0, 2)
         output_splitter.setStretchFactor(1, 0)
-        output_splitter.setStretchFactor(2, 1)
-        output_splitter.setStretchFactor(3, 5)
-
+        output_splitter.setStretchFactor(2, 0)
+        output_splitter.setStretchFactor(3, 9)
         pane_layout.addWidget(output_splitter)
 
         return pane
@@ -725,6 +792,15 @@ class ParcelDesktopApp(QMainWindow):
             self.ignored_table.setItem(row, 0, type_item)
             self.ignored_table.setItem(row, 1, text_item)
 
+            
+            # Update the collapsible group's title with counts and
+            # auto-expand it only when there is something to review.
+            _total_ignored = len(ignored_chunks)
+            _unresolved = count_unresolved(ignored_chunks)
+            self.ignored_group.setTitle(
+                format_ignored_title(_total_ignored, _unresolved)
+            )
+            self.ignored_group.setChecked(_total_ignored > 0)
         self.course_table.setRowCount(len(calls))
 
         for row, call in enumerate(calls):
@@ -761,6 +837,12 @@ class ParcelDesktopApp(QMainWindow):
             for col, value in enumerate(values):
                 self.course_table.setItem(row, col, QTableWidgetItem(str(value)))
 
+        for _r in range(self.course_table.rowCount()):
+            self.course_table.setItem(
+                _r, self.course_table.columnCount() - 1,
+                QTableWidgetItem("Legal"),
+            )
+        self._row_audit.replace_all_legal(self.course_table.rowCount())
         self._update_summary()
 
         # Replace displayed text with normalized form so span indices align for highlighting.
@@ -850,6 +932,7 @@ class ParcelDesktopApp(QMainWindow):
         return None
 
     def _on_ignored_row_selected(self) -> None:
+
         sel = self.ignored_table.selectionModel()
         if sel is None:
             return
@@ -858,6 +941,14 @@ class ParcelDesktopApp(QMainWindow):
             return
         span = self._ignored_chunks[rows[0]].get("source_span")
         self._highlight_source_span(span)
+
+    def _on_ignored_cell_double_clicked(self, row, col):
+        if row < 0 or row >= len(self._ignored_chunks):
+            return
+        chunk = self._ignored_chunks[row]
+        kind = chunk.get("type", "Ignored")
+        text = chunk.get("text", "") or "(no text)"
+        QMessageBox.information(self, f"{kind}", text)
 
     def _suggest_resolution_for_selected(self) -> None:
         """Suggest a COGO resolution for the selected Ignored row.
@@ -952,6 +1043,14 @@ class ParcelDesktopApp(QMainWindow):
         ]
         for col, val in enumerate(values):
             self.course_table.setItem(row, col, QTableWidgetItem(val))
+        self.course_table.setItem(
+            row, self.course_table.columnCount() - 1,
+            QTableWidgetItem("Suggested"),
+        )
+        self._row_audit.append(
+            RowAudit.from_suggestion(sug, bearing_text, distance_text)
+        )
+        self._tint_row(row, "#fef3c7")
         self._renumber_course_ids()
         self._update_summary()
         item = self.course_table.item(row, 2)
@@ -971,6 +1070,11 @@ class ParcelDesktopApp(QMainWindow):
         item = self.course_table.item(row, 2)
         self.course_table.scrollToItem(item)
         self.course_table.editItem(item)
+        self.course_table.setItem(
+            row, self.course_table.columnCount() - 1,
+            QTableWidgetItem("Manual"),
+        )
+        self._row_audit.append(RowAudit.manual())
 
     def delete_selected_row(self) -> None:
         selection = self.course_table.selectionModel()
@@ -981,6 +1085,7 @@ class ParcelDesktopApp(QMainWindow):
             return
         for row in rows:
             self.course_table.removeRow(row)
+            self._row_audit.remove_at(row)
         self._renumber_course_ids()
         self._update_summary()
 
@@ -998,6 +1103,8 @@ class ParcelDesktopApp(QMainWindow):
             ib = self.course_table.takeItem(b, col)
             self.course_table.setItem(a, col, ib if ib is not None else QTableWidgetItem(""))
             self.course_table.setItem(b, col, ia if ia is not None else QTableWidgetItem(""))
+        self._row_audit.swap(a, b)
+        self._reapply_row_tints()
 
     def move_row_up(self) -> None:
         row = self._selected_course_row()
@@ -1025,10 +1132,12 @@ class ParcelDesktopApp(QMainWindow):
         self.result = None
         self.summary_closure.setText("-")
         self._update_summary()
+        self._row_audit.clear()
 
     def _renumber_course_ids(self) -> None:
         for row in range(self.course_table.rowCount()):
             self.course_table.setItem(row, 0, QTableWidgetItem(f"L{row + 1}"))
+        self._reapply_row_tints()
 
     def _update_summary(self) -> None:
         self.summary_boundary_count.setText(str(self.course_table.rowCount()))
@@ -1147,6 +1256,34 @@ class ParcelDesktopApp(QMainWindow):
         labels = [self._call_label_for_row(call) for call in self.calls]
         self.canvas.animate(points, labels)
 
+
+    def open_large_preview(self) -> None:
+            # Build if not built yet so the technician can launch the large
+            # preview directly without manually clicking Build first.
+            if not self.result or "points" not in self.result:
+                try:
+                    self._build_result()
+                except Exception as exc:
+                    QMessageBox.critical(self, "Build Failed", str(exc))
+                    return
+            if not self.result or "points" not in self.result:
+                QMessageBox.information(
+                    self,
+                    "Large Parcel Preview",
+                    "Nothing to preview yet — parse a description and click "
+                    "Build Parcel first.",
+                )
+                return
+
+            # Local import to avoid a top-of-module cycle (ui.large_preview
+            # imports ParcelCanvas from this module).
+            from ui.large_preview import LargePreviewDialog
+
+            points = self.result["points"]
+            labels = [self._call_label_for_row(call) for call in self.calls]
+            dlg = LargePreviewDialog(self, points, labels)
+            dlg.show()
+            self._large_preview = dlg
     def export_dxf_file(self) -> None:
         if not self.result:
             try:
@@ -1316,12 +1453,124 @@ class ParcelDesktopApp(QMainWindow):
         )
 
 
+
+# Runtime attachment for audit handlers. This fixes cases where the direct-apply
+# script inserted audit helper methods outside the ParcelDesktopApp class.
+def _audit_show_row_audit(self):
+    row = self.course_table.currentRow()
+    if row < 0:
+        QMessageBox.information(self, "Row Audit", "Select a COGO row first.")
+        return
+
+    source_col = self.course_table.columnCount() - 1
+    source_item = self.course_table.item(row, source_col)
+    source = source_item.text() if source_item is not None else "Unknown"
+
+    store = getattr(self, "_row_audit_store", None)
+    audit = None
+
+    if store is not None:
+        for getter_name in ("get", "get_audit", "audit_for_row", "get_row_audit"):
+            getter = getattr(store, getter_name, None)
+            if getter is None:
+                continue
+
+            for row_key in (row, row + 1):
+                try:
+                    audit = getter(row_key)
+                except Exception:
+                    audit = None
+
+                if audit is not None:
+                    break
+
+            if audit is not None:
+                break
+
+    if audit is None:
+        QMessageBox.information(
+            self,
+            "Row Audit",
+            f"Row: {row + 1}\nSource: {source}\n\nNo detailed audit metadata found for this row.",
+        )
+        return
+
+    def field(name, default=""):
+        if isinstance(audit, dict):
+            return audit.get(name, default)
+        return getattr(audit, name, default)
+
+    details = [
+        f"Row: {row + 1}",
+        f"Source: {source}",
+        f"Original unresolved text: {field('original_text', field('unresolved_text', ''))}",
+        f"Method: {field('method', '')}",
+        f"Confidence: {field('confidence', '')}",
+        f"Reason: {field('reason', '')}",
+        f"Residual: {field('residual', '')}",
+        f"Suggested bearing: {field('bearing', field('suggested_bearing', ''))}",
+        f"Suggested distance: {field('distance', field('suggested_distance', ''))}",
+    ]
+
+    QMessageBox.information(
+        self,
+        "Row Audit",
+        "\n".join(str(item) for item in details if str(item).strip()),
+    )
+
+
+def _audit_on_course_cell_double_clicked(self, row, col):
+    source_col = self.course_table.columnCount() - 1
+    if col == source_col:
+        self.course_table.selectRow(row)
+        self._show_row_audit()
+
+
+ParcelDesktopApp._show_row_audit = _audit_show_row_audit
+ParcelDesktopApp._on_course_cell_double_clicked = _audit_on_course_cell_double_clicked
+
 def main() -> None:
     app = QApplication(sys.argv)
     window = ParcelDesktopApp()
     window.show()
     sys.exit(app.exec())
 
+
+    # ── Row audit ─────────────────────────────────────────────────────────
+    def _tint_row(self, row, hex_color):
+        bg = QColor(hex_color)
+        for col in range(self.course_table.columnCount()):
+            item = self.course_table.item(row, col)
+            if item is not None:
+                item.setBackground(bg)
+
+    def _reapply_row_tints(self):
+        for row in range(self.course_table.rowCount()):
+            audit = self._row_audit.get(row)
+            if audit.source == SOURCE_SUGGESTED:
+                self._tint_row(row, "#fef3c7")
+            else:
+                for col in range(self.course_table.columnCount()):
+                    item = self.course_table.item(row, col)
+                    if item is not None:
+                        item.setBackground(QColor("white"))
+
+    def _show_row_audit(self):
+        row = self._selected_course_row()
+        if row < 0:
+            QMessageBox.information(
+                self,
+                "Row Audit",
+                "Select a COGO row first to view its audit detail.",
+            )
+            return
+        audit = self._row_audit.get(row)
+        QMessageBox.information(self, f"Row Audit — L{row + 1}", audit.detail_text())
+
+    def _on_course_cell_double_clicked(self, row, col):
+        if col == self.course_table.columnCount() - 1:
+            audit = self._row_audit.get(row)
+            QMessageBox.information(self, f"Row Audit — L{row + 1}", audit.detail_text())
 
 if __name__ == "__main__":
     main()
