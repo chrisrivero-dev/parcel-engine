@@ -107,12 +107,15 @@ def parse_legal_description(
             )
             tie_idx += 1
         elif chunk.kind == KIND_REFERENCE_TIE:
+            if chunk.parsed_line is not None:
+                chunk.parsed_line.id = f"RT{tie_idx}"
+                chunk.parsed_line.source_span = chunk.source_span
             ties.append(
                 {
                     "id": f"RT{tie_idx}",
                     "kind": "reference_tie",
                     "raw_text": chunk.raw,
-                    "parsed_line": None,
+                    "parsed_line": chunk.parsed_line,
                     "source_span": chunk.source_span,
                 }
             )
