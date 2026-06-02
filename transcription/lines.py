@@ -126,16 +126,22 @@ LINE_NARRATIVE_RE = re.compile(
 )
 
 # Deed-style clauses where the bearing and distance are separated by a
-# longer context phrase that may itself contain commas, e.g.
-#   SOUTH 47°45'30" WEST, ALONG THE SOUTHERLY LINE OF SAID LAND, 120 FEET
-# The context body forbids digits and semicolons so we cannot accidentally
-# skip past the real distance or cross a clause boundary, and the
+# longer context phrase that may itself contain commas AND digits.
+# The descriptive context routinely contains numbered references that
+# are part of the *context*, not the call's distance, such as
+#   "PARALLEL TO THE NORTHERLY LINE OF SAID LOT 24, 244.61 FEET"
+#   "ALONG THE WESTERLY LINE OF LOT 24, 203.15 FEET"
+# Forbidding digits in the context body would let `LOT 24` veto the
+# match.  Forbidding only the clause separator `;` keeps the regex from
+# crossing a clause boundary, and the lazy quantifier locks onto the
+# first `\d+ (feet|foot|ft)` token after the body so simpler "S 47° W
+# 200 FEET"-shaped clauses still match at the right place.  The
 # mandatory feet/foot/ft anchor prevents grabbing area or count tokens
 # (e.g. "10 ACRES") that happen to appear in the context.
 LINE_DEED_RE = re.compile(
     _BEARING + r"""
     \s*,?\s*
-    (?P<context>[^\d;]{1,250}?)
+    (?P<context>[^;]{1,250}?)
     (?P<dist>\d+(?:\.\d+)?)
     \s+(?:feet|foot|ft)\b
     """,
