@@ -71,8 +71,7 @@ class ParcelCanvas(QGraphicsView):
     LINE_WIDTH = 3
     HIGHLIGHT_WIDTH = 6
     LABEL_POINT_SIZE = 12
-    PAD = 70.0
-
+    PAD = 40.0
     def __init__(self) -> None:
         super().__init__()
         self._scene = QGraphicsScene(self)
@@ -85,6 +84,9 @@ class ParcelCanvas(QGraphicsView):
         self._segments: List[Tuple[Point, Point, str]] = []
         self._segment_items: list = []  # QGraphicsLineItem per drawn segment
         self._highlighted: list = []
+        # When the technician manually zooms we stop auto-fitting on
+        # resize so their chosen zoom is preserved; Fit/Reset re-enable it.
+        self._user_zoomed = False
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._draw_next_segment)
         self._draw_index = 0
@@ -153,6 +155,7 @@ class ParcelCanvas(QGraphicsView):
     def prepare_drawing(self, points: List[Point], labels: List[str]) -> None:
         self.clear_canvas()
 
+        self._user_zoomed = False  # fresh drawing -> auto-fit until user zooms
         if len(points) < 2:
             return
 
@@ -236,22 +239,35 @@ class ParcelCanvas(QGraphicsView):
     def zoom_to_fit(self) -> None:
         rect = self._scene.itemsBoundingRect()
         if rect.isValid():
-            rect = rect.adjusted(-30, -30, 30, 30)
+            margin = max(rect.width(), rect.height()) * 0.04 + 10.0
+            rect = rect.adjusted(-margin, -margin, margin, margin)
             self.fitInView(rect, Qt.KeepAspectRatio)
 
 
     
     # ── Preview controls ──────────────────────────────────────────────────
+    def resizeEvent(self, event) -> None:
+        # Re-fit on every viewport size change (window show, splitter
+        # drag) so the parcel is never left clipped by a stale
+        # transform.  Skip when the user has manually zoomed.
+        super().resizeEvent(event)
+        if not self._user_zoomed and self._scene.items():
+            self.zoom_to_fit()
+    
     def zoom_in(self) -> None:
+        self._user_zoomed = True
         self.scale(1.25, 1.25)
     
     def zoom_out(self) -> None:
+        self._user_zoomed = True
         self.scale(0.8, 0.8)
     
     def fit_to_view(self) -> None:
+        self._user_zoomed = False
         self.zoom_to_fit()
     
     def reset_view(self) -> None:
+        self._user_zoomed = False
         self.resetTransform()
         self.zoom_to_fit()
 class ParcelDesktopApp(QMainWindow):
@@ -639,7 +655,7 @@ class ParcelDesktopApp(QMainWindow):
         reset_btn.clicked.connect(lambda: self.canvas.reset_view())
         preview_layout.addLayout(preview_controls)
         self.canvas = ParcelCanvas()
-        self.canvas.setMinimumHeight(460)
+        self.canvas.setMinimumHeight(420)
         preview_layout.addWidget(self.canvas, stretch=1)
 
         validation_label = QLabel("Validation")
@@ -663,11 +679,11 @@ class ParcelDesktopApp(QMainWindow):
 
         # COGO and Parcel Preview are the primary review areas.
         # Parse Summary starts collapsed; Ignored / Unparsed stays compact.
-        output_splitter.setSizes([300, 40, 40, 760])
-        output_splitter.setStretchFactor(0, 3)
+        output_splitter.setSizes([260, 36, 36, 840])
+        output_splitter.setStretchFactor(0, 2)
         output_splitter.setStretchFactor(1, 0)
         output_splitter.setStretchFactor(2, 0)
-        output_splitter.setStretchFactor(3, 8)
+        output_splitter.setStretchFactor(3, 9)
         pane_layout.addWidget(output_splitter)
 
         return pane
