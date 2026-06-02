@@ -646,13 +646,15 @@ class ParcelDesktopApp(QMainWindow):
         zoom_out_btn = QPushButton("Zoom Out")
         fit_btn = QPushButton("Fit to View")
         reset_btn = QPushButton("Reset View")
-        for btn in (zoom_in_btn, zoom_out_btn, fit_btn, reset_btn):
+        large_btn = QPushButton("Open Large Preview")
+        for btn in (zoom_in_btn, zoom_out_btn, fit_btn, reset_btn, large_btn):
             preview_controls.addWidget(btn)
         preview_controls.addStretch(1)
         zoom_in_btn.clicked.connect(lambda: self.canvas.zoom_in())
         zoom_out_btn.clicked.connect(lambda: self.canvas.zoom_out())
         fit_btn.clicked.connect(lambda: self.canvas.fit_to_view())
         reset_btn.clicked.connect(lambda: self.canvas.reset_view())
+        large_btn.clicked.connect(self.open_large_preview)
         preview_layout.addLayout(preview_controls)
         self.canvas = ParcelCanvas()
         self.canvas.setMinimumHeight(420)
@@ -1254,6 +1256,34 @@ class ParcelDesktopApp(QMainWindow):
         labels = [self._call_label_for_row(call) for call in self.calls]
         self.canvas.animate(points, labels)
 
+
+    def open_large_preview(self) -> None:
+            # Build if not built yet so the technician can launch the large
+            # preview directly without manually clicking Build first.
+            if not self.result or "points" not in self.result:
+                try:
+                    self._build_result()
+                except Exception as exc:
+                    QMessageBox.critical(self, "Build Failed", str(exc))
+                    return
+            if not self.result or "points" not in self.result:
+                QMessageBox.information(
+                    self,
+                    "Large Parcel Preview",
+                    "Nothing to preview yet — parse a description and click "
+                    "Build Parcel first.",
+                )
+                return
+
+            # Local import to avoid a top-of-module cycle (ui.large_preview
+            # imports ParcelCanvas from this module).
+            from ui.large_preview import LargePreviewDialog
+
+            points = self.result["points"]
+            labels = [self._call_label_for_row(call) for call in self.calls]
+            dlg = LargePreviewDialog(self, points, labels)
+            dlg.show()
+            self._large_preview = dlg
     def export_dxf_file(self) -> None:
         if not self.result:
             try:
