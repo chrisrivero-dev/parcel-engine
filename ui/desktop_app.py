@@ -53,6 +53,7 @@ from ui.preview_panel import count_unresolved, format_ignored_title
 from ui.section_select import FULL_TEXT_LABEL, resolve_parse_text
 from ui.image_viewer import ReferenceImageViewer
 from ui.manual_courses import build_manual_line
+from ui.manual_courses import build_manual_curve
 from ui.ocr_config import OCR_SETUP_MESSAGE, resolve_tesseract_path
 from ui.ocr_runner import (
     OcrError,
@@ -1148,33 +1149,67 @@ class ParcelDesktopApp(QMainWindow):
     def _calls_from_table(self) -> list:
         calls = []
         errors = []
+
+        def cell_text(row: int, col: int) -> str:
+            item = self.course_table.item(row, col)
+            return item.text().strip() if item else ""
+
+        def normalize_build_result(result):
+            """
+            Accept both helper contracts:
+            - call
+            - (call, errors)
+            - (call, errors, extra...)
+            """
+            if isinstance(result, tuple):
+                call = result[0] if len(result) >= 1 else None
+                row_errors = result[1] if len(result) >= 2 else []
+                if row_errors is None:
+                    row_errors = []
+                if isinstance(row_errors, str):
+                    row_errors = [row_errors]
+                return call, list(row_errors)
+            return result, []
+
         for row in range(self.course_table.rowCount()):
-            type_item = self.course_table.item(row, 1)
-            dir_item = self.course_table.item(row, 2)
-            dist_item = self.course_table.item(row, 3)
+            row_id = cell_text(row, 0)
+            row_type = cell_text(row, 1).lower()
+            direction = cell_text(row, 2)
+            distance = cell_text(row, 3)
+            radius = cell_text(row, 4)
+            delta = cell_text(row, 5)
 
-            row_type = (type_item.text() if type_item else "").strip().lower()
-            direction = dir_item.text() if dir_item else ""
-            distance = dist_item.text() if dist_item else ""
-
-            if not direction.strip() and not distance.strip():
-                continue
-
-            if row_type and row_type not in ("line", ""):
-                errors.append(
-                    f"Row {row + 1}: type {row_type!r} not supported (line only)"
-                )
+            if not any([row_id, row_type, direction, distance, radius, delta]):
                 continue
 
             try:
-                call = build_manual_line(direction, distance, len(calls) + 1)
-            except ValueError as exc:
-                errors.append(f"Row {row + 1}: {exc}")
-                continue
-            calls.append(call)
+                if row_type in ("", "line"):
+                    result = build_manual_line(direction, distance, row + 1)
+                    call, row_errors = normalize_build_result(result)
+                elif row_type == "curve":
+                    result = build_manual_curve(
+                        direction=direction,
+                        radius=radius,
+                        delta=delta,
+                        arc=distance,
+                        idx=row + 1,
+                    )
+                    call, row_errors = normalize_build_result(result)
+                else:
+                    call = None
+                    row_errors = [
+                        f"Row {row + 1}: type {row_type!r} not supported (use 'Line' or 'Curve')"
+                    ]
+            except Exception as exc:
+                call = None
+                row_errors = [f"Row {row + 1}: {exc}"]
+
+            errors.extend(row_errors)
+            if call is not None:
+                calls.append(call)
 
         if errors:
-            raise ValueError("\n".join(errors))
+            QMessageBox.warning(self, "Row Errors", "\n".join(errors))
         return calls
 
     def _build_result(self) -> None:
@@ -1951,3 +1986,79 @@ ParcelDesktopApp._cc_next_course = _cc_next_course
 ParcelDesktopApp._cc_toggle_play = _cc_toggle_play
 ParcelDesktopApp._cc_play_step = _cc_play_step
 ParcelDesktopApp._cc_refresh_styles = _cc_refresh_styles
+
+
+# ===========================================================================
+# Curve row support in Build Parcel
+# Appended by apply_curve_table_build_support.py.
+# Idempotent: presence of __CURVE_TABLE_BUILD_APPLIED__ blocks re-application.
+# ===========================================================================
+__CURVE_TABLE_BUILD_APPLIED__ = True
+
+from ui.manual_courses import (
+    build_manual_curve as _cv_build_curve,
+    build_manual_line as _cv_build_line,
+)
+
+
+def _cv_calls_from_table(self):
+    """Curve-aware replacement for ParcelDesktopApp._calls_from_table.
+
+    Dispatch on the row Type cell:
+      - 'curve'           -> build_manual_curve (handedness/radius/delta/arc)
+      - 'line' or blank   -> build_manual_line  (existing behaviour)
+      - anything else     -> clear row error, no silent coercion
+    """
+    calls = []
+    errors = []
+    for row in range(self.course_table.rowCount()):
+        type_item = self.course_table.item(row, 1)
+        dir_item = self.course_table.item(row, 2)
+        dist_item = self.course_table.item(row, 3)
+        radius_item = self.course_table.item(row, 4)
+        delta_item = self.course_table.item(row, 5)
+
+        row_type = (type_item.text() if type_item else "").strip().lower()
+        direction = dir_item.text() if dir_item else ""
+        distance = dist_item.text() if dist_item else ""
+        radius = radius_item.text() if radius_item else ""
+        delta = delta_item.text() if delta_item else ""
+
+        if not any(s.strip() for s in (direction, distance, radius, delta)):
+            continue
+
+        if row_type == "curve":
+            try:
+                call = _cv_build_curve(
+                    direction=direction,
+                    radius=radius,
+                    delta=delta,
+                    arc=distance,
+                    idx=len(calls) + 1,
+                )
+            except ValueError as exc:
+                errors.append(f"Row {row + 1}: {exc}")
+                continue
+            calls.append(call)
+            continue
+
+        if row_type and row_type not in ("line", ""):
+            errors.append(
+                f"Row {row + 1}: type {row_type!r} not supported "
+                f"(use 'Line' or 'Curve')"
+            )
+            continue
+
+        try:
+            call = _cv_build_line(direction, distance, len(calls) + 1)
+        except ValueError as exc:
+            errors.append(f"Row {row + 1}: {exc}")
+            continue
+        calls.append(call)
+
+    if errors:
+        raise ValueError("\n".join(errors))
+    return calls
+
+
+ParcelDesktopApp._calls_from_table = _cv_calls_from_table
