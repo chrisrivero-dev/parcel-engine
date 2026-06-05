@@ -276,6 +276,7 @@ class ParcelDesktopApp(QMainWindow):
 
         self.setWindowTitle("COGO Validator + DXF Export")
         self.resize(1500, 900)
+        self.setMinimumSize(900, 700)
 
         self.calls = []
         self._parsed_calls: list = []  # original parsed calls; always carry source_span
@@ -443,7 +444,7 @@ class ParcelDesktopApp(QMainWindow):
 
         self.ocr_lines_list = QListWidget()
         self.ocr_lines_list.setVisible(False)
-        self.ocr_lines_list.setMinimumHeight(100)
+        self.ocr_lines_list.setMinimumHeight(60)
         self.ocr_lines_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.ocr_lines_list.itemSelectionChanged.connect(self._on_ocr_line_selected)
         lines_layout.addWidget(self.ocr_lines_list, stretch=1)
@@ -523,7 +524,7 @@ class ParcelDesktopApp(QMainWindow):
         cogo_layout.addWidget(table_label)
 
         self.course_table = QTableWidget(0, 7)
-        self.course_table.setMinimumHeight(260)
+        self.course_table.setMinimumHeight(120)
         self.course_table.setHorizontalHeaderLabels(
             ["ID", "Type", "Direction", "Distance", "Radius", "Delta", "Source"]
         )
@@ -610,7 +611,7 @@ class ParcelDesktopApp(QMainWindow):
         ignored_layout.addWidget(ignored_note)
 
         self.ignored_table = QTableWidget(0, 2)
-        self.ignored_table.setMinimumHeight(90)
+        self.ignored_table.setMinimumHeight(60)
         self.ignored_table.setHorizontalHeaderLabels(["Type", "Text"])
         self.ignored_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         self.ignored_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
@@ -657,7 +658,7 @@ class ParcelDesktopApp(QMainWindow):
         large_btn.clicked.connect(self.open_large_preview)
         preview_layout.addLayout(preview_controls)
         self.canvas = ParcelCanvas()
-        self.canvas.setMinimumHeight(420)
+        self.canvas.setMinimumHeight(120)
         preview_layout.addWidget(self.canvas, stretch=1)
 
         validation_label = QLabel("Validation")
