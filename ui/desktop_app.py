@@ -53,6 +53,7 @@ from ui.preview_panel import count_unresolved, format_ignored_title
 from ui.section_select import FULL_TEXT_LABEL, resolve_parse_text
 from ui.image_viewer import ReferenceImageViewer
 from ui.manual_courses import build_manual_line
+from ui.manual_courses import build_manual_curve
 from ui.ocr_config import OCR_SETUP_MESSAGE, resolve_tesseract_path
 from ui.ocr_runner import (
     OcrError,
@@ -276,6 +277,7 @@ class ParcelDesktopApp(QMainWindow):
 
         self.setWindowTitle("COGO Validator + DXF Export")
         self.resize(1500, 900)
+        self.setMinimumSize(900, 700)
 
         self.calls = []
         self._parsed_calls: list = []  # original parsed calls; always carry source_span
@@ -443,7 +445,7 @@ class ParcelDesktopApp(QMainWindow):
 
         self.ocr_lines_list = QListWidget()
         self.ocr_lines_list.setVisible(False)
-        self.ocr_lines_list.setMinimumHeight(100)
+        self.ocr_lines_list.setMinimumHeight(60)
         self.ocr_lines_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.ocr_lines_list.itemSelectionChanged.connect(self._on_ocr_line_selected)
         lines_layout.addWidget(self.ocr_lines_list, stretch=1)
@@ -523,7 +525,7 @@ class ParcelDesktopApp(QMainWindow):
         cogo_layout.addWidget(table_label)
 
         self.course_table = QTableWidget(0, 7)
-        self.course_table.setMinimumHeight(260)
+        self.course_table.setMinimumHeight(120)
         self.course_table.setHorizontalHeaderLabels(
             ["ID", "Type", "Direction", "Distance", "Radius", "Delta", "Source"]
         )
@@ -610,7 +612,7 @@ class ParcelDesktopApp(QMainWindow):
         ignored_layout.addWidget(ignored_note)
 
         self.ignored_table = QTableWidget(0, 2)
-        self.ignored_table.setMinimumHeight(90)
+        self.ignored_table.setMinimumHeight(60)
         self.ignored_table.setHorizontalHeaderLabels(["Type", "Text"])
         self.ignored_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         self.ignored_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
@@ -657,7 +659,7 @@ class ParcelDesktopApp(QMainWindow):
         large_btn.clicked.connect(self.open_large_preview)
         preview_layout.addLayout(preview_controls)
         self.canvas = ParcelCanvas()
-        self.canvas.setMinimumHeight(420)
+        self.canvas.setMinimumHeight(120)
         preview_layout.addWidget(self.canvas, stretch=1)
 
         validation_label = QLabel("Validation")
@@ -1147,33 +1149,67 @@ class ParcelDesktopApp(QMainWindow):
     def _calls_from_table(self) -> list:
         calls = []
         errors = []
+
+        def cell_text(row: int, col: int) -> str:
+            item = self.course_table.item(row, col)
+            return item.text().strip() if item else ""
+
+        def normalize_build_result(result):
+            """
+            Accept both helper contracts:
+            - call
+            - (call, errors)
+            - (call, errors, extra...)
+            """
+            if isinstance(result, tuple):
+                call = result[0] if len(result) >= 1 else None
+                row_errors = result[1] if len(result) >= 2 else []
+                if row_errors is None:
+                    row_errors = []
+                if isinstance(row_errors, str):
+                    row_errors = [row_errors]
+                return call, list(row_errors)
+            return result, []
+
         for row in range(self.course_table.rowCount()):
-            type_item = self.course_table.item(row, 1)
-            dir_item = self.course_table.item(row, 2)
-            dist_item = self.course_table.item(row, 3)
+            row_id = cell_text(row, 0)
+            row_type = cell_text(row, 1).lower()
+            direction = cell_text(row, 2)
+            distance = cell_text(row, 3)
+            radius = cell_text(row, 4)
+            delta = cell_text(row, 5)
 
-            row_type = (type_item.text() if type_item else "").strip().lower()
-            direction = dir_item.text() if dir_item else ""
-            distance = dist_item.text() if dist_item else ""
-
-            if not direction.strip() and not distance.strip():
-                continue
-
-            if row_type and row_type not in ("line", ""):
-                errors.append(
-                    f"Row {row + 1}: type {row_type!r} not supported (line only)"
-                )
+            if not any([row_id, row_type, direction, distance, radius, delta]):
                 continue
 
             try:
-                call = build_manual_line(direction, distance, len(calls) + 1)
-            except ValueError as exc:
-                errors.append(f"Row {row + 1}: {exc}")
-                continue
-            calls.append(call)
+                if row_type in ("", "line"):
+                    result = build_manual_line(direction, distance, row + 1)
+                    call, row_errors = normalize_build_result(result)
+                elif row_type == "curve":
+                    result = build_manual_curve(
+                        direction=direction,
+                        radius=radius,
+                        delta=delta,
+                        arc=distance,
+                        idx=row + 1,
+                    )
+                    call, row_errors = normalize_build_result(result)
+                else:
+                    call = None
+                    row_errors = [
+                        f"Row {row + 1}: type {row_type!r} not supported (use 'Line' or 'Curve')"
+                    ]
+            except Exception as exc:
+                call = None
+                row_errors = [f"Row {row + 1}: {exc}"]
+
+            errors.extend(row_errors)
+            if call is not None:
+                calls.append(call)
 
         if errors:
-            raise ValueError("\n".join(errors))
+            QMessageBox.warning(self, "Row Errors", "\n".join(errors))
         return calls
 
     def _build_result(self) -> None:
@@ -1574,3 +1610,455 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+# ===========================================================================
+# Synchronized course review
+# Appended by apply_course_source_sync_and_playback.py
+# Adds per-course colour, row<->source<->plot sync, and Prev/Next/Play.
+# Idempotent: presence of __COURSE_SYNC_APPLIED__ blocks re-application.
+# ===========================================================================
+__COURSE_SYNC_APPLIED__ = True
+
+from PySide6.QtCore import Qt as _CC_Qt, QTimer as _CC_QTimer
+from PySide6.QtGui import (
+    QAction as _CC_QAction,
+    QColor as _CC_QColor,
+    QPen as _CC_QPen,
+    QTextCharFormat as _CC_TCF,
+    QTextCursor as _CC_TC,
+)
+from PySide6.QtWidgets import (
+    QGraphicsLineItem as _CC_QGLI,
+    QTableWidgetItem as _CC_QTWI,
+    QTextEdit as _CC_QTE,
+    QToolBar as _CC_QTB,
+)
+
+from ui.course_colors import KIND_LEGAL as _CC_KIND_LEGAL, assign_styles as _cc_assign_styles
+
+
+# ----- ParcelCanvas augmentation ------------------------------------------
+
+_cc_orig_clear = ParcelCanvas.clear_canvas
+_cc_orig_draw_next = ParcelCanvas._draw_next_segment
+
+
+def _cc_clear_canvas(self):
+    _cc_orig_clear(self)
+    self._cc_segment_items = []
+    self._cc_segment_colors = []
+    self._cc_segment_dashed = []
+    self._cc_highlight_index = -1
+
+
+def _cc_draw_next_segment(self):
+    i = getattr(self, "_draw_index", 0)
+    segs = getattr(self, "_segments", [])
+    has_segment_to_draw = i < len(segs)
+    before = set(self._scene.items()) if has_segment_to_draw else None
+    _cc_orig_draw_next(self)
+    if before is None:
+        return
+    if not hasattr(self, "_cc_segment_items"):
+        self._cc_segment_items = []
+        self._cc_segment_colors = []
+        self._cc_segment_dashed = []
+        self._cc_highlight_index = -1
+    after = self._scene.items()
+    for it in after:
+        if it in before:
+            continue
+        if isinstance(it, _CC_QGLI):
+            self._cc_segment_items.append(it)
+            break
+
+
+def _cc_pen(color, width, dashed):
+    pen = _CC_QPen(_CC_QColor(color))
+    pen.setWidth(width)
+    pen.setCosmetic(True)
+    if dashed:
+        pen.setStyle(_CC_Qt.DashLine)
+    return pen
+
+
+def _cc_apply_pen_at(self, idx, width):
+    items = getattr(self, "_cc_segment_items", [])
+    if idx < 0 or idx >= len(items):
+        return
+    color = self._cc_segment_colors[idx] if idx < len(self._cc_segment_colors) else "#1f2937"
+    dashed = self._cc_segment_dashed[idx] if idx < len(self._cc_segment_dashed) else False
+    items[idx].setPen(_cc_pen(color, width, dashed))
+
+
+def _cc_set_course_colors(self, colors, dashed=None):
+    """Recolour every drawn segment to the per-course palette."""
+    items = getattr(self, "_cc_segment_items", [])
+    if not items:
+        # Geometry not drawn yet; remember colours for the next draw cycle.
+        self._cc_segment_colors = list(colors)
+        self._cc_segment_dashed = list(dashed) if dashed else [False] * len(colors)
+        return
+    self._cc_segment_colors = list(colors)
+    self._cc_segment_dashed = list(dashed) if dashed else [False] * len(colors)
+    for i in range(len(items)):
+        _cc_apply_pen_at(self, i, 2)
+    hi = getattr(self, "_cc_highlight_index", -1)
+    if 0 <= hi < len(items):
+        _cc_apply_pen_at(self, hi, 5)
+
+
+def _cc_highlight_segment(self, index):
+    items = getattr(self, "_cc_segment_items", [])
+    if not items:
+        return
+    prev = getattr(self, "_cc_highlight_index", -1)
+    if 0 <= prev < len(items) and prev != index:
+        _cc_apply_pen_at(self, prev, 2)
+        items[prev].setZValue(0)
+    self._cc_highlight_index = index
+    if 0 <= index < len(items):
+        _cc_apply_pen_at(self, index, 5)
+        items[index].setZValue(10)
+
+
+def _cc_clear_highlight(self):
+    items = getattr(self, "_cc_segment_items", [])
+    if not items:
+        return
+    self._cc_highlight_index = -1
+    for i in range(len(items)):
+        _cc_apply_pen_at(self, i, 2)
+        items[i].setZValue(0)
+
+
+ParcelCanvas.clear_canvas = _cc_clear_canvas
+ParcelCanvas._draw_next_segment = _cc_draw_next_segment
+ParcelCanvas.set_course_colors = _cc_set_course_colors
+ParcelCanvas.highlight_segment = _cc_highlight_segment
+ParcelCanvas.clear_highlight = _cc_clear_highlight
+
+
+# ----- ParcelDesktopApp augmentation --------------------------------------
+
+_cc_orig_init = ParcelDesktopApp.__init__
+_cc_orig_parse = ParcelDesktopApp.parse_legal_text
+_cc_orig_build = ParcelDesktopApp.build_parcel
+_cc_orig_animate = getattr(ParcelDesktopApp, "animate_parcel", None)
+_cc_orig_clear_rows = ParcelDesktopApp.clear_rows
+_cc_orig_row_sel = ParcelDesktopApp._on_course_row_selected
+_cc_orig_renumber = getattr(ParcelDesktopApp, "_renumber_course_ids", None)
+_cc_orig_add_row = getattr(ParcelDesktopApp, "add_manual_row", None)
+
+
+def _cc_selected_row(self):
+    sel = self.course_table.selectionModel()
+    if sel is None:
+        return -1
+    rows = sorted({i.row() for i in sel.selectedIndexes()})
+    return rows[0] if rows else -1
+
+
+def _cc_select_row(self, row):
+    n = self.course_table.rowCount()
+    if n == 0:
+        return
+    row = max(0, min(row, n - 1))
+    self.course_table.selectRow(row)
+    item = self.course_table.item(row, 0)
+    if item is not None:
+        self.course_table.scrollToItem(item)
+
+
+def _cc_prev_course(self):
+    n = self.course_table.rowCount()
+    if n == 0:
+        return
+    cur = _cc_selected_row(self)
+    self._cc_select_row(n - 1 if cur <= 0 else cur - 1)
+
+
+def _cc_next_course(self):
+    n = self.course_table.rowCount()
+    if n == 0:
+        return
+    cur = _cc_selected_row(self)
+    nxt = 0 if (cur < 0 or cur >= n - 1) else cur + 1
+    self._cc_select_row(nxt)
+
+
+def _cc_toggle_play(self):
+    if self._cc_play_timer.isActive():
+        self._cc_play_timer.stop()
+        self._cc_play_action.setText("Play")
+        return
+    if self.course_table.rowCount() == 0:
+        return
+    if _cc_selected_row(self) < 0:
+        self._cc_select_row(0)
+    self._cc_play_timer.start(900)
+    self._cc_play_action.setText("Stop")
+
+
+def _cc_play_step(self):
+    n = self.course_table.rowCount()
+    if n == 0:
+        self._cc_play_timer.stop()
+        self._cc_play_action.setText("Play")
+        return
+    cur = _cc_selected_row(self)
+    if cur < 0 or cur >= n - 1:
+        self._cc_play_timer.stop()
+        self._cc_play_action.setText("Play")
+        return
+    self._cc_select_row(cur + 1)
+
+
+def _cc_build_review_toolbar(self):
+    tb = _CC_QTB("Course Review")
+    tb.setObjectName("CourseReviewToolBar")
+    self.addToolBar(tb)
+    prev_act = _CC_QAction("◀ Prev Course", self)
+    prev_act.triggered.connect(self._cc_prev_course)
+    tb.addAction(prev_act)
+    next_act = _CC_QAction("Next Course ▶", self)
+    next_act.triggered.connect(self._cc_next_course)
+    tb.addAction(next_act)
+    self._cc_play_action = _CC_QAction("Play", self)
+    self._cc_play_action.triggered.connect(self._cc_toggle_play)
+    tb.addAction(self._cc_play_action)
+
+
+def _cc_apply_row_swatches(self):
+    for r, style in enumerate(self._cc_course_styles):
+        id_item = self.course_table.item(r, 0)
+        if id_item is None:
+            id_item = _CC_QTWI("")
+            self.course_table.setItem(r, 0, id_item)
+        id_item.setBackground(_CC_QColor(style.color))
+        id_item.setForeground(_CC_QColor("#ffffff"))
+
+
+def _cc_refresh_styles(self):
+    rows = []
+    for r in range(self.course_table.rowCount()):
+        id_item = self.course_table.item(r, 0)
+        course_id = id_item.text() if id_item else f"L{r + 1}"
+        rows.append((course_id, _CC_KIND_LEGAL))
+    self._cc_course_styles = _cc_assign_styles(rows)
+    _cc_apply_row_swatches(self)
+    colors = [s.color for s in self._cc_course_styles]
+    dashed = [s.dashed for s in self._cc_course_styles]
+    try:
+        self.canvas.set_course_colors(colors, dashed)
+    except Exception:
+        pass
+
+
+def _cc_span_for_row(self, row):
+    spans = getattr(self, "_cc_row_spans", [])
+    if 0 <= row < len(spans) and spans[row] is not None:
+        return spans[row]
+    calls = getattr(self, "calls", [])
+    if 0 <= row < len(calls):
+        return getattr(calls[row], "source_span", None)
+    return None
+
+
+def _cc_color_for_row(self, row):
+    styles = getattr(self, "_cc_course_styles", [])
+    if 0 <= row < len(styles):
+        return styles[row].color
+    return None
+
+
+def _cc_highlight_source(self, span, color_hex=None):
+    if span is None:
+        try:
+            self.legal_input.setExtraSelections([])
+        except Exception:
+            pass
+        return
+    sel = _CC_QTE.ExtraSelection()
+    cursor = self.legal_input.textCursor()
+    cursor.setPosition(span.start)
+    cursor.setPosition(span.end, _CC_TC.KeepAnchor)
+    sel.cursor = cursor
+    fmt = _CC_TCF()
+    tint = _CC_QColor(color_hex) if color_hex else _CC_QColor("#fde68a")
+    tint.setAlpha(90)
+    fmt.setBackground(tint)
+    sel.format = fmt
+    self.legal_input.setExtraSelections([sel])
+    sc = self.legal_input.textCursor()
+    sc.setPosition(span.start)
+    self.legal_input.setTextCursor(sc)
+    self.legal_input.ensureCursorVisible()
+
+
+# Wrapped methods -----------------------------------------------------------
+
+def _cc_init(self):
+    _cc_orig_init(self)
+    self._cc_course_styles = []
+    self._cc_row_spans = []
+    self._cc_play_timer = _CC_QTimer(self)
+    self._cc_play_timer.timeout.connect(self._cc_play_step)
+    self._cc_build_review_toolbar()
+
+
+def _cc_parse(self):
+    _cc_orig_parse(self)
+    calls = getattr(self, "calls", []) or []
+    self._cc_row_spans = [getattr(c, "source_span", None) for c in calls]
+    self._cc_refresh_styles()
+
+
+def _cc_build(self):
+    _cc_orig_build(self)
+    self._cc_refresh_styles()
+
+
+def _cc_animate(self):
+    _cc_orig_animate(self)
+    _CC_QTimer.singleShot(50, self._cc_refresh_styles)
+
+
+def _cc_clear_rows(self):
+    if hasattr(self, "_cc_play_timer"):
+        self._cc_play_timer.stop()
+        try:
+            self._cc_play_action.setText("Play")
+        except Exception:
+            pass
+    _cc_orig_clear_rows(self)
+    self._cc_course_styles = []
+    self._cc_row_spans = []
+    try:
+        self.canvas.clear_highlight()
+    except Exception:
+        pass
+    try:
+        self.legal_input.setExtraSelections([])
+    except Exception:
+        pass
+
+
+def _cc_row_selected(self):
+    _cc_orig_row_sel(self)
+    row = _cc_selected_row(self)
+    if row < 0:
+        return
+    _cc_highlight_source(self, _cc_span_for_row(self, row), _cc_color_for_row(self, row))
+    try:
+        self.canvas.highlight_segment(row)
+    except Exception:
+        pass
+
+
+def _cc_renumber(self):
+    _cc_orig_renumber(self)
+    self._cc_refresh_styles()
+
+
+def _cc_add_row(self):
+    _cc_orig_add_row(self)
+    self._cc_refresh_styles()
+
+
+ParcelDesktopApp.__init__ = _cc_init
+ParcelDesktopApp.parse_legal_text = _cc_parse
+ParcelDesktopApp.build_parcel = _cc_build
+if _cc_orig_animate is not None:
+    ParcelDesktopApp.animate_parcel = _cc_animate
+ParcelDesktopApp.clear_rows = _cc_clear_rows
+ParcelDesktopApp._on_course_row_selected = _cc_row_selected
+if _cc_orig_renumber is not None:
+    ParcelDesktopApp._renumber_course_ids = _cc_renumber
+if _cc_orig_add_row is not None:
+    ParcelDesktopApp.add_manual_row = _cc_add_row
+
+ParcelDesktopApp._cc_build_review_toolbar = _cc_build_review_toolbar
+ParcelDesktopApp._cc_select_row = _cc_select_row
+ParcelDesktopApp._cc_prev_course = _cc_prev_course
+ParcelDesktopApp._cc_next_course = _cc_next_course
+ParcelDesktopApp._cc_toggle_play = _cc_toggle_play
+ParcelDesktopApp._cc_play_step = _cc_play_step
+ParcelDesktopApp._cc_refresh_styles = _cc_refresh_styles
+
+
+# ===========================================================================
+# Curve row support in Build Parcel
+# Appended by apply_curve_table_build_support.py.
+# Idempotent: presence of __CURVE_TABLE_BUILD_APPLIED__ blocks re-application.
+# ===========================================================================
+__CURVE_TABLE_BUILD_APPLIED__ = True
+
+from ui.manual_courses import (
+    build_manual_curve as _cv_build_curve,
+    build_manual_line as _cv_build_line,
+)
+
+
+def _cv_calls_from_table(self):
+    """Curve-aware replacement for ParcelDesktopApp._calls_from_table.
+
+    Dispatch on the row Type cell:
+      - 'curve'           -> build_manual_curve (handedness/radius/delta/arc)
+      - 'line' or blank   -> build_manual_line  (existing behaviour)
+      - anything else     -> clear row error, no silent coercion
+    """
+    calls = []
+    errors = []
+    for row in range(self.course_table.rowCount()):
+        type_item = self.course_table.item(row, 1)
+        dir_item = self.course_table.item(row, 2)
+        dist_item = self.course_table.item(row, 3)
+        radius_item = self.course_table.item(row, 4)
+        delta_item = self.course_table.item(row, 5)
+
+        row_type = (type_item.text() if type_item else "").strip().lower()
+        direction = dir_item.text() if dir_item else ""
+        distance = dist_item.text() if dist_item else ""
+        radius = radius_item.text() if radius_item else ""
+        delta = delta_item.text() if delta_item else ""
+
+        if not any(s.strip() for s in (direction, distance, radius, delta)):
+            continue
+
+        if row_type == "curve":
+            try:
+                call = _cv_build_curve(
+                    direction=direction,
+                    radius=radius,
+                    delta=delta,
+                    arc=distance,
+                    idx=len(calls) + 1,
+                )
+            except ValueError as exc:
+                errors.append(f"Row {row + 1}: {exc}")
+                continue
+            calls.append(call)
+            continue
+
+        if row_type and row_type not in ("line", ""):
+            errors.append(
+                f"Row {row + 1}: type {row_type!r} not supported "
+                f"(use 'Line' or 'Curve')"
+            )
+            continue
+
+        try:
+            call = _cv_build_line(direction, distance, len(calls) + 1)
+        except ValueError as exc:
+            errors.append(f"Row {row + 1}: {exc}")
+            continue
+        calls.append(call)
+
+    if errors:
+        raise ValueError("\n".join(errors))
+    return calls
+
+
+ParcelDesktopApp._calls_from_table = _cv_calls_from_table
