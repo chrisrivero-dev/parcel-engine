@@ -53,6 +53,7 @@ from ui.preview_panel import count_unresolved, format_ignored_title
 from ui.section_select import FULL_TEXT_LABEL, resolve_parse_text
 from ui.image_viewer import ReferenceImageViewer
 from ui.manual_courses import build_manual_line
+from ui.table_call_adapter import build_calls_from_table_rows
 from ui.manual_courses import build_manual_curve
 from ui.ocr_config import OCR_SETUP_MESSAGE, resolve_tesseract_path
 from ui.ocr_runner import (
@@ -1147,69 +1148,30 @@ class ParcelDesktopApp(QMainWindow):
         self.summary_errors_count.setText(str(self._last_errors_count))
 
     def _calls_from_table(self) -> list:
-        calls = []
-        errors = []
+        rows = []
 
         def cell_text(row: int, col: int) -> str:
             item = self.course_table.item(row, col)
             return item.text().strip() if item else ""
 
-        def normalize_build_result(result):
-            """
-            Accept both helper contracts:
-            - call
-            - (call, errors)
-            - (call, errors, extra...)
-            """
-            if isinstance(result, tuple):
-                call = result[0] if len(result) >= 1 else None
-                row_errors = result[1] if len(result) >= 2 else []
-                if row_errors is None:
-                    row_errors = []
-                if isinstance(row_errors, str):
-                    row_errors = [row_errors]
-                return call, list(row_errors)
-            return result, []
-
         for row in range(self.course_table.rowCount()):
-            row_id = cell_text(row, 0)
-            row_type = cell_text(row, 1).lower()
-            direction = cell_text(row, 2)
-            distance = cell_text(row, 3)
-            radius = cell_text(row, 4)
-            delta = cell_text(row, 5)
+            rows.append(
+                {
+                    "id": cell_text(row, 0),
+                    "type": cell_text(row, 1),
+                    "direction": cell_text(row, 2),
+                    "distance": cell_text(row, 3),
+                    "radius": cell_text(row, 4),
+                    "delta": cell_text(row, 5),
+                    "row_number": row + 1,
+                }
+            )
 
-            if not any([row_id, row_type, direction, distance, radius, delta]):
-                continue
-
-            try:
-                if row_type in ("", "line"):
-                    result = build_manual_line(direction, distance, row + 1)
-                    call, row_errors = normalize_build_result(result)
-                elif row_type == "curve":
-                    result = build_manual_curve(
-                        direction=direction,
-                        radius=radius,
-                        delta=delta,
-                        arc=distance,
-                        idx=row + 1,
-                    )
-                    call, row_errors = normalize_build_result(result)
-                else:
-                    call = None
-                    row_errors = [
-                        f"Row {row + 1}: type {row_type!r} not supported (use 'Line' or 'Curve')"
-                    ]
-            except Exception as exc:
-                call = None
-                row_errors = [f"Row {row + 1}: {exc}"]
-
-            errors.extend(row_errors)
-            if call is not None:
-                calls.append(call)
+        calls, errors = build_calls_from_table_rows(rows)
 
         if errors:
             QMessageBox.warning(self, "Row Errors", "\n".join(errors))
+
         return calls
 
     def _build_result(self) -> None:
