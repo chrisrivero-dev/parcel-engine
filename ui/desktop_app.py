@@ -292,6 +292,12 @@ class ParcelDesktopApp(QMainWindow):
         self._ocr_lines: list = []
         self.project: ParcelProject = ParcelProject()
 
+        self._active_playback_row = -1
+        self._course_playback_running = False
+        self._course_playback_timer = QTimer(self)
+        self._course_playback_timer.setInterval(900)
+        self._course_playback_timer.timeout.connect(self._play_next_course_step)
+
         self._build_toolbar()
         self._build_ui()
 
@@ -536,6 +542,23 @@ class ParcelDesktopApp(QMainWindow):
         self.course_table.itemSelectionChanged.connect(self._on_course_row_selected)
         self.course_table.cellDoubleClicked.connect(self._on_course_cell_double_clicked)
         cogo_layout.addWidget(self.course_table, stretch=1)
+        playback_layout = QHBoxLayout()
+        self.prev_course_btn = QPushButton("Prev Course")
+        self.next_course_btn = QPushButton("Next Course")
+        self.play_course_btn = QPushButton("Play Courses")
+        self.course_playback_status = QLabel("Course playback: ready")
+        self.course_playback_status.setStyleSheet("color: #374151; font-size: 12px;")
+
+        self.prev_course_btn.clicked.connect(self._go_to_previous_course)
+        self.next_course_btn.clicked.connect(self._go_to_next_course)
+        self.play_course_btn.clicked.connect(self._toggle_course_playback)
+
+        playback_layout.addWidget(self.prev_course_btn)
+        playback_layout.addWidget(self.next_course_btn)
+        playback_layout.addWidget(self.play_course_btn)
+        playback_layout.addWidget(self.course_playback_status, stretch=1)
+        cogo_layout.addLayout(playback_layout)
+
 
         row_button_row = QHBoxLayout()
         add_row_btn = QPushButton("Add Row")
@@ -791,6 +814,13 @@ class ParcelDesktopApp(QMainWindow):
 
     def parse_legal_text(self) -> None:
         full_text = self.legal_input.toPlainText()
+        self._course_playback_running = False
+        if hasattr(self, "_course_playback_timer"):
+            self._course_playback_timer.stop()
+        if hasattr(self, "play_course_btn"):
+            self.play_course_btn.setText("Play Courses")
+        self._active_playback_row = -1
+
         text = resolve_parse_text(
             full_text, self._detected_sections, self.section_combo.currentIndex()
         ).strip()
@@ -889,6 +919,125 @@ class ParcelDesktopApp(QMainWindow):
         cursor.setPosition(span.end, QTextCursor.KeepAnchor)
         self.legal_input.setTextCursor(cursor)
         self.legal_input.ensureCursorVisible()
+
+    def _course_row_count(self) -> int:
+        return self.course_table.rowCount() if hasattr(self, "course_table") else 0
+
+    def _selected_course_row(self) -> int:
+        if not hasattr(self, "course_table"):
+            return -1
+        selected = self.course_table.selectionModel().selectedRows()
+        if selected:
+            return selected[0].row()
+        row = self.course_table.currentRow()
+        return row if row >= 0 else -1
+
+    def _set_course_playback_status(self, message: str) -> None:
+        if hasattr(self, "course_playback_status"):
+            self.course_playback_status.setText(message)
+
+    def _set_active_course_row(self, row: int) -> None:
+        row_count = self._course_row_count()
+        if row_count <= 0:
+            self._active_playback_row = -1
+            self._set_course_playback_status("Course playback: no COGO rows")
+            return
+
+        row = max(0, min(row, row_count - 1))
+        self._active_playback_row = row
+        self.course_table.selectRow(row)
+        self.course_table.scrollToItem(self.course_table.item(row, 0))
+        self._set_course_playback_status(f"Course playback: row {row + 1} of {row_count}")
+
+    def _course_row_text(self, row: int, column: int) -> str:
+        item = self.course_table.item(row, column)
+        return item.text().strip() if item else ""
+
+    def _course_row_pause_reason(self, row: int) -> str | None:
+        course_type = self._course_row_text(row, 1).lower()
+        audit_text = self._course_row_text(row, 6).lower()
+
+        if course_type and course_type not in {"line", "curve"}:
+            return f"unsupported row type: {course_type}"
+
+        pause_tokens = {
+            "suggested": "suggested row requires technician inspection",
+            "manual": "manual row requires technician inspection",
+            "unresolved": "unresolved row requires Suggest Resolution",
+            "error": "row has an error and requires inspection",
+            "unsupported": "unsupported row requires inspection",
+        }
+
+        for token, reason in pause_tokens.items():
+            if token in audit_text:
+                return reason
+
+        return None
+
+    def _go_to_previous_course(self) -> None:
+        current = self._selected_course_row()
+        if current < 0:
+            current = self._active_playback_row
+        self._set_active_course_row(max(0, current - 1))
+
+    def _go_to_next_course(self) -> None:
+        current = self._selected_course_row()
+        if current < 0:
+            current = self._active_playback_row
+        self._set_active_course_row(min(self._course_row_count() - 1, current + 1))
+
+    def _toggle_course_playback(self) -> None:
+        if self._course_playback_running:
+            self._course_playback_running = False
+            self._course_playback_timer.stop()
+            self.play_course_btn.setText("Play Courses")
+            self._set_course_playback_status("Course playback: paused by technician")
+            return
+
+        if self._course_row_count() <= 0:
+            self._set_course_playback_status("Course playback: no COGO rows")
+            return
+
+        selected = self._selected_course_row()
+        self._active_playback_row = selected if selected >= 0 else 0
+        self._course_playback_running = True
+        self.play_course_btn.setText("Pause Courses")
+        self._play_next_course_step()
+
+    def _play_next_course_step(self) -> None:
+        row_count = self._course_row_count()
+        if row_count <= 0:
+            self._course_playback_running = False
+            self._course_playback_timer.stop()
+            self.play_course_btn.setText("Play Courses")
+            self._set_course_playback_status("Course playback: no COGO rows")
+            return
+
+        if self._active_playback_row < 0:
+            self._active_playback_row = 0
+
+        if self._active_playback_row >= row_count:
+            self._course_playback_running = False
+            self._course_playback_timer.stop()
+            self.play_course_btn.setText("Play Courses")
+            self._set_course_playback_status("Course playback: complete")
+            return
+
+        row = self._active_playback_row
+        self._set_active_course_row(row)
+
+        reason = self._course_row_pause_reason(row)
+        if reason:
+            self._course_playback_running = False
+            self._course_playback_timer.stop()
+            self.play_course_btn.setText("Play Courses")
+            self._set_course_playback_status(f"Course playback paused: {reason}")
+            return
+
+        self._active_playback_row = row + 1
+
+        if self._course_playback_running:
+            self._course_playback_timer.start()
 
     def _on_course_row_selected(self) -> None:
         sel = self.course_table.selectionModel()
