@@ -207,13 +207,14 @@ class ParcelCanvas(QGraphicsView):
 
         mid_x = (p1.x() + p2.x()) / 2
         mid_y = (p1.y() + p2.y()) / 2
-        label = self._scene.addSimpleText(label_text)
-        label.setBrush(QColor("#b91c1c"))
-        font = label.font()
-        font.setPointSize(self.LABEL_POINT_SIZE)
-        font.setBold(True)
-        label.setFont(font)
-        label.setPos(mid_x + 6, mid_y + 6)
+        if label_text:
+            label = self._scene.addSimpleText(label_text)
+            label.setBrush(QColor("#b91c1c"))
+            font = label.font()
+            font.setPointSize(self.LABEL_POINT_SIZE)
+            font.setBold(True)
+            label.setFont(font)
+            label.setPos(mid_x + 6, mid_y + 6)
 
         self._draw_index += 1
 
@@ -717,6 +718,32 @@ class ParcelDesktopApp(QMainWindow):
             return f"{hand} R={radius} Δ={delta}"
 
         return getattr(call, "id", "?")
+
+
+    def _segment_labels_for_points(self, points) -> list[str]:
+        """Return one label per drawn segment.
+
+        Line calls get one label on their single segment.
+        Curve calls may expand into many chord segments; only the first chord
+        receives the curve label and the remaining child chords are unlabeled.
+        """
+        segment_count = max(0, len(points) - 1)
+        labels = [""] * segment_count
+
+        for row, call in enumerate(getattr(self, "calls", [])):
+            label = self._call_label_for_row(call)
+            seg_range = self._segment_range_for_row(row)
+
+            if seg_range:
+                start, _end = seg_range
+                if 0 <= start < segment_count:
+                    labels[start] = label
+                continue
+
+            if row < segment_count:
+                labels[row] = label
+
+        return labels
 
     def show_error(self, message: str) -> None:
         QMessageBox.warning(self, "Build Failed", message)
@@ -1233,7 +1260,7 @@ class ParcelDesktopApp(QMainWindow):
             return
 
         points = self.result["points"]
-        labels = [self._call_label_for_row(call) for call in self.calls]
+        labels = self._segment_labels_for_points(points)
         self.canvas.draw_static(points, labels)
 
     def animate_parcel(self) -> None:
@@ -1251,7 +1278,7 @@ class ParcelDesktopApp(QMainWindow):
             return
 
         points = self.result["points"]
-        labels = [self._call_label_for_row(call) for call in self.calls]
+        labels = self._segment_labels_for_points(points)
         self.canvas.animate(points, labels)
 
 
@@ -1278,7 +1305,7 @@ class ParcelDesktopApp(QMainWindow):
             from ui.large_preview import LargePreviewDialog
 
             points = self.result["points"]
-            labels = [self._call_label_for_row(call) for call in self.calls]
+            labels = self._segment_labels_for_points(points)
             dlg = LargePreviewDialog(self, points, labels)
             dlg.show()
             self._large_preview = dlg
