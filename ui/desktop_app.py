@@ -207,13 +207,14 @@ class ParcelCanvas(QGraphicsView):
 
         mid_x = (p1.x() + p2.x()) / 2
         mid_y = (p1.y() + p2.y()) / 2
-        label = self._scene.addSimpleText(label_text)
-        label.setBrush(QColor("#b91c1c"))
-        font = label.font()
-        font.setPointSize(self.LABEL_POINT_SIZE)
-        font.setBold(True)
-        label.setFont(font)
-        label.setPos(mid_x + 6, mid_y + 6)
+        if label_text:
+            label = self._scene.addSimpleText(label_text)
+            label.setBrush(QColor("#b91c1c"))
+            font = label.font()
+            font.setPointSize(self.LABEL_POINT_SIZE)
+            font.setBold(True)
+            label.setFont(font)
+            label.setPos(mid_x + 6, mid_y + 6)
 
         self._draw_index += 1
 
@@ -325,6 +326,16 @@ class ParcelDesktopApp(QMainWindow):
         ref_image_action = QAction("Load Reference Image", self)
         ref_image_action.triggered.connect(self.load_reference_image)
         toolbar.addAction(ref_image_action)
+
+        toolbar.addSeparator()
+
+        save_action = QAction("Save Project", self)
+        save_action.triggered.connect(self.save_project)
+        toolbar.addAction(save_action)
+
+        load_action = QAction("Load Project", self)
+        load_action.triggered.connect(self.load_project)
+        toolbar.addAction(load_action)
 
     def _build_ui(self) -> None:
         main = QWidget()
@@ -717,6 +728,32 @@ class ParcelDesktopApp(QMainWindow):
             return f"{hand} R={radius} Δ={delta}"
 
         return getattr(call, "id", "?")
+
+
+    def _segment_labels_for_points(self, points) -> list[str]:
+        """Return one label per drawn segment.
+
+        Line calls get one label on their single segment.
+        Curve calls may expand into many chord segments; only the first chord
+        receives the curve label and the remaining child chords are unlabeled.
+        """
+        segment_count = max(0, len(points) - 1)
+        labels = [""] * segment_count
+
+        for row, call in enumerate(getattr(self, "calls", [])):
+            label = self._call_label_for_row(call)
+            seg_range = self._segment_range_for_row(row)
+
+            if seg_range:
+                start, _end = seg_range
+                if 0 <= start < segment_count:
+                    labels[start] = label
+                continue
+
+            if row < segment_count:
+                labels[row] = label
+
+        return labels
 
     def show_error(self, message: str) -> None:
         QMessageBox.warning(self, "Build Failed", message)
@@ -1233,7 +1270,7 @@ class ParcelDesktopApp(QMainWindow):
             return
 
         points = self.result["points"]
-        labels = [self._call_label_for_row(call) for call in self.calls]
+        labels = self._segment_labels_for_points(points)
         self.canvas.draw_static(points, labels)
 
     def animate_parcel(self) -> None:
@@ -1251,7 +1288,7 @@ class ParcelDesktopApp(QMainWindow):
             return
 
         points = self.result["points"]
-        labels = [self._call_label_for_row(call) for call in self.calls]
+        labels = self._segment_labels_for_points(points)
         self.canvas.animate(points, labels)
 
 
@@ -1278,7 +1315,7 @@ class ParcelDesktopApp(QMainWindow):
             from ui.large_preview import LargePreviewDialog
 
             points = self.result["points"]
-            labels = [self._call_label_for_row(call) for call in self.calls]
+            labels = self._segment_labels_for_points(points)
             dlg = LargePreviewDialog(self, points, labels)
             dlg.show()
             self._large_preview = dlg
@@ -1317,6 +1354,143 @@ class ParcelDesktopApp(QMainWindow):
 
     def zoom_to_fit(self) -> None:
         self.canvas.zoom_to_fit()
+
+    # ── Project save / load ───────────────────────────────────────────────
+
+    def _snapshot_table_rows(self) -> list:
+        rows = []
+        for r in range(self.course_table.rowCount()):
+            def cell(c):
+                item = self.course_table.item(r, c)
+                return item.text() if item else ""
+            rows.append({
+                "id":        cell(0),
+                "type":      cell(1),
+                "direction": cell(2),
+                "distance":  cell(3),
+                "radius":    cell(4),
+                "delta":     cell(5),
+                "source":    cell(6),
+            })
+        return rows
+
+    def save_project(self) -> None:
+        from ui.project_io import build_project_dict, write_project_file
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save Project",
+            os.path.join(os.getcwd(), "project.parcel"),
+            "Parcel Project (*.parcel);;JSON Files (*.json)",
+        )
+        if not path:
+            return
+        closure_text = self.summary_closure.text() if hasattr(self, "summary_closure") else ""
+        data = build_project_dict(
+            legal_text=self.legal_input.toPlainText(),
+            start_x=self.start_x_input.text(),
+            start_y=self.start_y_input.text(),
+            ocr_draft=self.ocr_draft_input.toPlainText(),
+            image_path=self.reference_image_viewer.current_path,
+            ocr_lines=self._ocr_lines,
+            table_rows=self._snapshot_table_rows(),
+            audit_store=self._row_audit,
+            closure_text=closure_text,
+        )
+        try:
+            write_project_file(path, data)
+        except Exception as exc:
+            QMessageBox.critical(self, "Save Failed", str(exc))
+            return
+        QMessageBox.information(self, "Project Saved", f"Saved:\n{path}")
+
+    def load_project(self) -> None:
+        from ui.project_io import (
+            read_project_file,
+            validate_project_dict,
+            audit_store_from_list,
+            ocr_lines_from_list,
+        )
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Open Project",
+            os.getcwd(),
+            "Parcel Project (*.parcel);;JSON Files (*.json)",
+        )
+        if not path:
+            return
+        try:
+            data = read_project_file(path)
+            validate_project_dict(data)
+        except Exception as exc:
+            QMessageBox.critical(self, "Load Failed", f"Could not read project:\n{exc}")
+            return
+
+        # ---- restore fields that don't require a parse/build ---------------
+        self.legal_input.blockSignals(True)
+        self.legal_input.setPlainText(data.get("legal_text", ""))
+        self.legal_input.blockSignals(False)
+
+        self.start_x_input.setText(data.get("start_x", "0.0"))
+        self.start_y_input.setText(data.get("start_y", "0.0"))
+        self.ocr_draft_input.setPlainText(data.get("ocr_draft", ""))
+
+        # ---- OCR lines -----------------------------------------------------
+        raw_ocr = data.get("ocr_lines", [])
+        try:
+            self._ocr_lines = ocr_lines_from_list(raw_ocr)
+        except Exception:
+            self._ocr_lines = []
+        self._populate_ocr_lines(self._ocr_lines)
+
+        # ---- reference image -----------------------------------------------
+        image_path = data.get("reference_image_path", "")
+        if image_path and os.path.isfile(image_path):
+            self.reference_image_viewer.load(image_path)
+        else:
+            self.reference_image_viewer.clear()
+
+        # ---- course table --------------------------------------------------
+        rows = data.get("course_rows", [])
+        self.course_table.blockSignals(True)
+        self.course_table.setRowCount(0)
+        self.course_table.setRowCount(len(rows))
+        for r, row in enumerate(rows):
+            for c, key in enumerate(("id", "type", "direction", "distance", "radius", "delta", "source")):
+                from PySide6.QtWidgets import QTableWidgetItem
+                self.course_table.setItem(r, c, QTableWidgetItem(row.get(key, "")))
+        self.course_table.blockSignals(False)
+
+        # ---- audit store ---------------------------------------------------
+        self._row_audit.clear()
+        raw_audits = data.get("row_audits", [])
+        if raw_audits:
+            try:
+                audit_store_from_list(self._row_audit, raw_audits)
+            except Exception:
+                self._row_audit.replace_all_legal(len(rows))
+        else:
+            self._row_audit.replace_all_legal(len(rows))
+
+        # ---- reset derived state so a fresh Build works --------------------
+        self.calls = []
+        self._parsed_calls = []
+        self.result = None
+        self.summary_closure.setText(data.get("closure", "-") or "-")
+        self._update_summary()
+
+        # Refresh colour styles if the _cc_ overlay is active.
+        try:
+            self._cc_row_spans = [None] * len(rows)
+            self._cc_refresh_styles()
+        except Exception:
+            pass
+
+        QMessageBox.information(
+            self,
+            "Project Loaded",
+            f"Loaded {len(rows)} course row(s).\n"
+            "Press Build Parcel to restore geometry.",
+        )
 
     def load_reference_image(self) -> None:
         file_path, _ = QFileDialog.getOpenFileName(
