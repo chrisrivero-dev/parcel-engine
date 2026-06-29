@@ -1934,12 +1934,41 @@ def _cc_clear_rows(self):
         pass
 
 
+def _cc_update_ocr_image_box(self, row):
+    from ui.ocr_line_match import best_ocr_line_for_text
+    ocr_lines = getattr(self, "_ocr_lines", [])
+    viewer = getattr(self, "reference_image_viewer", None)
+    if not ocr_lines or viewer is None:
+        return
+    span = _cc_span_for_row(self, row)
+    span_text = getattr(span, "text", None) if span is not None else None
+    if not span_text:
+        try:
+            viewer.clear_highlight()
+        except Exception:
+            pass
+        return
+    match_idx = best_ocr_line_for_text(span_text, ocr_lines)
+    if match_idx is not None:
+        ln = ocr_lines[match_idx]
+        try:
+            viewer.highlight_box(ln.x, ln.y, ln.width, ln.height)
+        except Exception:
+            pass
+    else:
+        try:
+            viewer.clear_highlight()
+        except Exception:
+            pass
+
+
 def _cc_row_selected(self):
     _cc_orig_row_sel(self)
     row = _cc_selected_row(self)
     if row < 0:
         return
     _cc_highlight_source(self, _cc_span_for_row(self, row), _cc_color_for_row(self, row))
+    _cc_update_ocr_image_box(self, row)
     try:
         self.canvas.highlight_segment(row)
     except Exception:
